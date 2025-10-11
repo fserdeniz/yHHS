@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environments
+yHHS_env/
+.venv/
+venv/
+env/
+
+# OS / Editors
+.DS_Store
+.idea/
+.vscode/
+
+# Large/binary capture data (do not commit)
+*.raw
+*.iq
+*.bin
+LTEIQ.raw
+
