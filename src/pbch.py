@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List
 from .lte_params import LTEConfig, symbol_starts_for_subframe, cp_lengths_normal, fft_symbol
 
 
@@ -52,13 +52,12 @@ def crs_data_mask_for_pbch(ncellid: int, cellrefp: int = 1) -> np.ndarray:
     v_shift = ncellid % 6
     mask = np.ones((4, 72), dtype=bool)
     idxs = np.arange(72)
-    # Port 0 CRS on l=0
-    crs_p0 = (idxs % 6) == (v_shift % 6)
-    mask[0, crs_p0] = False
-    if cellrefp >= 2:
-        # Port 1 CRS on l=0, 3-subcarrier shift
-        crs_p1 = (idxs % 6) == ((v_shift + 3) % 6)
-        mask[0, crs_p1] = False
+    crs0 = (idxs % 6) == (v_shift % 6)
+    crs1 = (idxs % 6) == ((v_shift + 3) % 6)
+    mask[0, crs0] = False  # port 0
+    mask[0, crs1] = False  # port 1 (reserved even if unused)
+    mask[1, crs0] = False  # port 2
+    mask[1, crs1] = False  # port 3
     return mask
 
 
@@ -99,6 +98,66 @@ def qpsk_llrs(pbch_eq: np.ndarray, noise_var: float = 1.0) -> np.ndarray:
     return np.column_stack([llr0, llr1]).reshape(-1)
 
 
+_PBCH_INTERLEAVER_PERM = [
+    1, 17, 9, 25, 5, 21, 13, 29,
+    3, 19, 11, 27, 7, 23, 15, 31,
+    0, 16, 8, 24, 4, 20, 12, 28,
+    2, 18, 10, 26, 6, 22, 14, 30,
+]
+
+
+def _pbch_subblock_interleave(stream_index: int) -> np.ndarray:
+    C = 32
+    D = 40
+    R = int(np.ceil(D / C))
+    K_pi = R * C
+    N_dummy = K_pi - D
+    seq: List[Optional[Tuple[int, int]]] = [None] * N_dummy + [(stream_index, k) for k in range(D)]
+    matrix = np.empty((R, C), dtype=object)
+    idx = 0
+    for r in range(R):
+        for c in range(C):
+            matrix[r, c] = seq[idx]
+            idx += 1
+    permuted = np.empty_like(matrix)
+    for new_c, old_c in enumerate(_PBCH_INTERLEAVER_PERM):
+        permuted[:, new_c] = matrix[:, old_c]
+    v: List[Optional[Tuple[int, int]]] = []
+    for c in range(C):
+        for r in range(R):
+            v.append(permuted[r, c])
+    return np.array(v, dtype=object)
+
+
+_PBCH_RATE_MATCH_MAP: Dict[int, List[Tuple[int, int]]] = {}
+_PBCH_CRC_MASKS = {
+    1: 0x0000,
+    2: 0xFFFF,
+    4: 0xAAAA,
+}
+
+
+def _pbch_rate_match_map(rv_idx: int) -> List[Tuple[int, int]]:
+    rv_idx = int(rv_idx) & 0x3
+    if rv_idx in _PBCH_RATE_MATCH_MAP:
+        return _PBCH_RATE_MATCH_MAP[rv_idx]
+    streams = [_pbch_subblock_interleave(i) for i in range(3)]
+    w = np.concatenate(streams)
+    N_cb = len(w)
+    R_tc = int(np.ceil(40 / 32))
+    ceil_term = int(np.ceil(N_cb / (8 * R_tc)))
+    k0 = R_tc * (2 * ceil_term * rv_idx + 2)
+    mapping: List[Tuple[int, int]] = []
+    idx = k0
+    while len(mapping) < 480:
+        val = w[idx % N_cb]
+        if val is not None:
+            mapping.append(val)
+        idx += 1
+    _PBCH_RATE_MATCH_MAP[rv_idx] = mapping
+    return mapping
+
+
 # --- Viterbi decoder (rate-1/3, K=7) scaffold ---
 def _build_trellis_rate13_k7():
     K = 7
@@ -120,12 +179,36 @@ def _build_trellis_rate13_k7():
     return next_state, out_bits
 
 
+_NEXT_STATE, _OUT_BITS = _build_trellis_rate13_k7()
+
+
+def _compute_prev_states() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    prev_states = np.zeros_like(_NEXT_STATE)
+    prev_inputs = np.zeros_like(_NEXT_STATE, dtype=np.int8)
+    prev_outputs = np.zeros((_NEXT_STATE.shape[0], 2, _OUT_BITS.shape[-1]), dtype=np.int8)
+    counts = np.zeros(_NEXT_STATE.shape[0], dtype=int)
+    for s in range(_NEXT_STATE.shape[0]):
+        for b in (0, 1):
+            ns = _NEXT_STATE[s, b]
+            idx = counts[ns]
+            prev_states[ns, idx] = s
+            prev_inputs[ns, idx] = b
+            prev_outputs[ns, idx] = _OUT_BITS[s, b]
+            counts[ns] += 1
+    return prev_states, prev_inputs, prev_outputs
+
+
+_PREV_STATE, _PREV_INPUT, _PREV_OUTPUT = _compute_prev_states()
+_PREV_SIGNS = 1 - 2 * _PREV_OUTPUT
+
+
 def viterbi_decode_rate13_k7(llrs: np.ndarray) -> np.ndarray:
     """Soft-decision Viterbi for rate-1/3, K=7 convolutional code.
     llrs: length = 3 * N coded bits in order [c0,c1,c2, c0,c1,c2, ...]
     Returns estimated N information bits (tail-biting not handled).
     """
-    next_state, out_bits = _build_trellis_rate13_k7()
+    next_state = _NEXT_STATE
+    out_bits = _OUT_BITS
     n_states = next_state.shape[0]
     n_sym = llrs.size // 3
     # Path metrics (start from state 0)
@@ -161,6 +244,39 @@ def viterbi_decode_rate13_k7(llrs: np.ndarray) -> np.ndarray:
     return bits
 
 
+def viterbi_decode_rate13_k7_tailbiting(llrs: np.ndarray) -> np.ndarray:
+    """Tail-biting Viterbi decoding for rate-1/3, K=7 convolutional code."""
+    if llrs.size % 3 != 0 or llrs.size == 0:
+        return np.array([], dtype=np.uint8)
+    llrs = llrs.reshape(-1, 3)
+    n_sym = llrs.shape[0]
+    n_states = _NEXT_STATE.shape[0]
+    pm = np.full((n_states, n_states), np.inf)
+    pm[np.arange(n_states), np.arange(n_states)] = 0.0
+    prev_state = np.full((n_sym, n_states, n_states), -1, dtype=np.int16)
+    prev_input = np.zeros((n_sym, n_states, n_states), dtype=np.int8)
+    for t in range(n_sym):
+        y = llrs[t]
+        bm = -np.einsum('j,sij->si', y, _PREV_SIGNS, optimize=True)
+        cand0 = np.take(pm, _PREV_STATE[:, 0], axis=1) + bm[:, 0][None, :]
+        cand1 = np.take(pm, _PREV_STATE[:, 1], axis=1) + bm[:, 1][None, :]
+        choose0 = cand0 <= cand1
+        pm = np.where(choose0, cand0, cand1)
+        prev_state[t] = np.where(choose0, _PREV_STATE[:, 0][None, :], _PREV_STATE[:, 1][None, :])
+        prev_input[t] = np.where(choose0, _PREV_INPUT[:, 0][None, :], _PREV_INPUT[:, 1][None, :])
+    final_metrics = pm[np.arange(n_states), np.arange(n_states)]
+    best_start = int(np.argmin(final_metrics))
+    if np.isinf(final_metrics[best_start]):
+        return np.array([], dtype=np.uint8)
+    bits = np.zeros(n_sym, dtype=np.uint8)
+    state = best_start
+    for t in range(n_sym - 1, -1, -1):
+        b = prev_input[t, best_start, state]
+        bits[t] = b
+        state = prev_state[t, best_start, state]
+    return bits
+
+
 def crc16_ccitt_bits(bits: np.ndarray, init: int = 0xFFFF) -> int:
     poly = 0x1021
     crc = init
@@ -175,60 +291,12 @@ def crc16_ccitt_bits(bits: np.ndarray, init: int = 0xFFFF) -> int:
 
 
 def pbch_descrambler(bits: np.ndarray, ncellid: int, i_mod4: int = 0) -> np.ndarray:
-    """Generate LTE Gold sequence and XOR (approx). Tries multiple c_init variants.
-
-    This function includes several plausible c_init variants from 36.211-style
-    definitions to increase the chance of success with limited capture length.
-    Returns the descrambled bits for the first variant (others are tested in decoder).
-    """
-    def gold_seq(c_init: int, length: int) -> np.ndarray:
-        # LTE Gold sequence c(n) using two LFSRs x1/x2 (per 36.211 7.2):
-        x1 = np.zeros(length + 1600 + 31, dtype=np.uint8)
-        x2 = np.zeros_like(x1)
-        x1[0] = 1
-        for n in range(31, x1.size):
-            x1[n] = (x1[n - 3] ^ x1[n - 31]) & 1
-        # Initialize x2 with c_init
-        for i in range(31):
-            x2[i] = (c_init >> i) & 1
-        for n in range(31, x2.size):
-            x2[n] = (x2[n - 3] ^ x2[n - 2] ^ x2[n - 1] ^ x2[n - 31]) & 1
-        c = (x1[1600:1600 + length] ^ x2[1600:1600 + length]).astype(np.uint8)
-        return c
-
-    # Return default XOR with one heuristic c_init
-    # Heuristic: tie to NCellID and i_mod4 in a simple way
-    c_init_guess = ((ncellid & 0x3FF) << 9) ^ (i_mod4 << 4) ^ 0x1FF
-    c = gold_seq(c_init_guess, bits.size)
-    return bits ^ c
+    seq = pbch_scrambling_sequence(ncellid, bits.size)
+    return bits ^ seq
 
 
 def pbch_descrambler_candidates(bits: np.ndarray, ncellid: int, i_mod4: int) -> Tuple[np.ndarray, ...]:
-    """Produce multiple descrambling candidates using different c_init heuristics."""
-    def gold_seq(c_init: int, length: int) -> np.ndarray:
-        x1 = np.zeros(length + 1600 + 31, dtype=np.uint8)
-        x2 = np.zeros_like(x1)
-        x1[0] = 1
-        for n in range(31, x1.size):
-            x1[n] = (x1[n - 3] ^ x1[n - 31]) & 1
-        for i in range(31):
-            x2[i] = (c_init >> i) & 1
-        for n in range(31, x2.size):
-            x2[n] = (x2[n - 3] ^ x2[n - 2] ^ x2[n - 1] ^ x2[n - 31]) & 1
-        return (x1[1600:1600 + length] ^ x2[1600:1600 + length]).astype(np.uint8)
-
-    L = bits.size
-    variants = []
-    # A few heuristic c_init patterns used in LTE for PBCH-like channels
-    variants.append(((ncellid & 0x3FF) << 9) | (i_mod4 << 4) | 0x1FF)
-    variants.append(((ncellid & 0x3FF) << 10) | (i_mod4 << 5) | 0x155)
-    variants.append(((ncellid & 0x3FF) << 7) | (i_mod4 << 2) | 0x35)
-    variants.append((ncellid & 0x3FF) ^ (i_mod4 << 9) ^ 0x3E1)
-    outs = []
-    for ci in variants:
-        c = gold_seq(ci, L)
-        outs.append(bits ^ c)
-    return tuple(outs)
+    return (pbch_descrambler(bits, ncellid, i_mod4),)
 
 
 def _gold_seq(c_init: int, length: int) -> np.ndarray:
@@ -245,20 +313,18 @@ def _gold_seq(c_init: int, length: int) -> np.ndarray:
     return (x1[1600:1600 + length] ^ x2[1600:1600 + length]).astype(np.uint8)
 
 
-def pbch_scramble_seq(length: int, ncellid: int, i_mod4: int) -> np.ndarray:
-    """Heuristic PBCH scrambling sequence for one transmission (length bits).
+def pbch_scrambling_sequence(ncellid: int, length: int, offset: int = 0) -> np.ndarray:
+    seq = _gold_seq(ncellid, length + offset)
+    return seq[offset:offset + length]
 
-    We derive a c_init tied to NCellID and i_mod4 similar to 36.211-style forms
-    to stabilize decoding on typical captures.
-    """
-    c_init = ((ncellid & 0x3FF) << 9) | ((i_mod4 & 0x3) << 4) | 0x1FF
-    return _gold_seq(c_init, length)
+
+def pbch_scramble_seq(length: int, ncellid: int, i_mod4: int) -> np.ndarray:
+    return pbch_scrambling_sequence(ncellid, length)
 
 
 def descramble_llrs(llrs: np.ndarray, ncellid: int, i_mod4: int) -> np.ndarray:
-    """Apply bit-wise descrambling to soft LLRs: L' = L * (1 - 2*c)."""
-    c = pbch_scramble_seq(llrs.size, ncellid, i_mod4)
-    signs = 1.0 - 2.0 * c.astype(float)
+    seq = pbch_scrambling_sequence(ncellid, llrs.size)
+    signs = 1.0 - 2.0 * seq.astype(float)
     return llrs * signs
 
 
@@ -276,64 +342,21 @@ def pbch_scramble_seq_variants(length: int, ncellid: int, i_mod4: int) -> Tuple[
     return tuple(outs)
 
 
-def deratematch_approx(llrs_480: np.ndarray) -> np.ndarray:
-    """Approximate rate de-matching from 480 softbits to 120 by local averaging.
-    This groups every 4 consecutive LLRs to one (simple average)."""
-    L = llrs_480.size
-    n = (L // 4)
-    resh = llrs_480[:4 * n].reshape(n, 4)
-    return resh.mean(axis=1)
-
-
-def deratematch_pick_rv(llrs_480: np.ndarray, i_mod4: int) -> Optional[np.ndarray]:
-    """Select 120 softbits for a given redundancy version index i_mod4∈{0,1,2,3}.
-
-    Assumes single 5 ms capture provides 480 LLRs corresponding to one of the
-    four PBCH transmissions. We pick one column from a (120,4) view.
-    """
-    if llrs_480.size < 480:
-        return None
-    ll = llrs_480[:480].reshape(120, 4)
-    return ll[:, i_mod4].copy()
-
-
 def deratematch_pbch_llrs(llrs480: np.ndarray, i_mod4: int) -> Optional[np.ndarray]:
-    """Standard-inspired PBCH de-rate matching from 480 softbits to 120 softbits.
-
-    Model: 120 convolutional-coded bits are repeated to a circular buffer of length 1920
-    (16x repetition). Each transmission selects 480 consecutive bits with offset i_mod4*480.
-    We invert by accumulating the 480 received softbits back into 120 positions via modulo.
-    """
+    """Invert PBCH rate matching (TS 36.212 5.1.4.2) to recover 120 soft bits."""
     if llrs480.size < 480:
         return None
-    y = llrs480[:480]
-    L = 120
-    out = np.zeros(L, dtype=float)
-    cnt = np.zeros(L, dtype=float)
-    start = (i_mod4 % 4) * 480
-    for j in range(480):
-        idx = (start + j) % 1920
-        k = idx % L
-        out[k] += float(y[j])
-        cnt[k] += 1.0
-    cnt[cnt == 0] = 1.0
-    return out / cnt
-
-
-def deratematch_fold(llrs: np.ndarray, L: int = 120, offset: int = 0) -> np.ndarray:
-    """Generic fold: accumulate arbitrary-length softbits into period L with offset.
-
-    out[k] = sum_{j}( llrs[j] where (j+offset) % L == k ) / count.
-    """
-    out = np.zeros(L, dtype=float)
-    cnt = np.zeros(L, dtype=float)
-    n = llrs.size
-    for j in range(n):
-        k = (j + offset) % L
-        out[k] += float(llrs[j])
-        cnt[k] += 1.0
-    cnt[cnt == 0] = 1.0
-    return out / cnt
+    mapping = _pbch_rate_match_map(i_mod4)
+    acc = np.zeros((3, 40), dtype=float)
+    for llr, (stream, bit_idx) in zip(llrs480[:480], mapping):
+        acc[stream, bit_idx] += float(llr)
+    out = np.empty(120, dtype=float)
+    idx = 0
+    for bit_idx in range(40):
+        for stream in range(3):
+            out[idx] = acc[stream, bit_idx]
+            idx += 1
+    return out
 
 
 def bits_to_uint(bits: np.ndarray) -> int:
@@ -386,89 +409,38 @@ def try_decode_mib_from_pbch(pbch_re: np.ndarray, ncellid: int) -> Optional[Dict
       - De-rate match and Viterbi-decode (36.212 5.3.1.1, K=7) to 40 bits (24 MIB + 16 CRC)
       - Verify CRC (scrambled with NCellID) and extract fields: NDLRB, PHICHDuration, Ng, SFN, CellRefP
     """
-    # Basic pipeline: mask CRS → LLRS → de-rate match (PBCH) → Viterbi → CRC/MIB check
-    # Try both CRS masks (CellRefP hypotheses) and redundancy versions
-    for cellrefp_h in (1, 2):
+    for cellrefp_h in (1, 2, 4):
         mask = crs_data_mask_for_pbch(ncellid, cellrefp=cellrefp_h)
-        data_re = pbch_re[mask].reshape(-1)
+        data_re = pbch_re.transpose(1, 0)[mask.transpose(1, 0)].reshape(-1)
         llrs_all = qpsk_llrs(data_re, noise_var=1.0)
-        # Try windows of 480 soft bits if we have more
-        if llrs_all.size < 240:  # need at least 120 symbols worth
+        if llrs_all.size < 480:
             continue
-        starts = [0]
-        if llrs_all.size >= 480:
-            max_start = llrs_all.size - 480
-            # Use at most 4 evenly spaced windows including 0 and max_start
-            if max_start <= 0:
-                starts = [0]
-            else:
-                nwin = 3
-                starts = sorted(set(int(round(i * max_start / (nwin - 1))) for i in range(nwin)))
-        for i_mod4 in range(4):
-            for st in starts:
-                seg = llrs_all[st:st+min(480, llrs_all.size-st)]
-                # If segment shorter than 480, fold generically; else, descramble then standard de-rate
-                if seg.size >= 480:
-                    seg480 = seg[:480]
-                    # try multiple scrambler variants
-                    best = None
-                    for c in pbch_scramble_seq_variants(480, ncellid, i_mod4)[:3]:
-                        signs = 1.0 - 2.0 * c.astype(float)
-                        dseg = seg480 * signs
-                        llrs120_cand = deratematch_pbch_llrs(dseg, i_mod4)
-                        if llrs120_cand is None:
-                            continue
-                        # heuristic score: mean |LLR|
-                        sc = float(np.mean(np.abs(llrs120_cand)))
-                        if (best is None) or (sc > best[0]):
-                            best = (sc, llrs120_cand)
-                    llrs120 = None if best is None else best[1]
-                else:
-                    # Generic fold with small offset sweep to mitigate interleaver unknowns
-                    best_bits = None
-                    best_score = -1
-                    best_llrs120 = None
-                    for off in range(0, 8):
-                        llrs120_cand = deratematch_fold(seg, L=120, offset=off)
-                        # Quick score: energy concentration and stability
-                        sc = float(np.mean(np.abs(llrs120_cand)))
-                        if sc > best_score:
-                            best_score = sc
-                            best_llrs120 = llrs120_cand
-                    llrs120 = best_llrs120
+        max_start = llrs_all.size - 480
+        for rv in range(4):
+            for st in range(0, max_start + 1):
+                llrs480 = descramble_llrs(llrs_all[st:st + 480], ncellid, rv)
+                llrs120 = deratematch_pbch_llrs(llrs480, rv)
                 if llrs120 is None:
                     continue
-                # Soft Viterbi on 120 softbits → 40 bits
-                # Early quality gate: skip weak candidates
-                if float(np.mean(np.abs(llrs120))) < 0.2:
-                    continue
-                decoded = viterbi_decode_rate13_k7(llrs120[: (llrs120.size // 3) * 3])
+                decoded = viterbi_decode_rate13_k7_tailbiting(llrs120)
                 if decoded.size < 40:
                     continue
                 payload = decoded[:24]
                 crc_bits = decoded[24:40]
                 calc = crc16_ccitt_bits(payload)
                 got = bits_to_uint(crc_bits)
-                # CRC mask hypotheses tied to NCellID and CellRefP
-                masks = [
-                    0x0000,
-                    (ncellid & 0xFFFF),
-                    ((ncellid << 2) | {1:0,2:1}.get(cellrefp_h, 0)) & 0xFFFF,
-                    ((ncellid ^ 0xA5A5) & 0xFFFF),
-                    ((ncellid * 3) & 0xFFFF),
-                    ((ncellid * 5 + 0x3) & 0xFFFF),
-                ]
-                if any(((got ^ m) == calc) for m in masks):
-                    fields = parse_mib_fields(payload, i_mod4)
-                    # Sanity checks to avoid false positives
-                    if fields.get('NDLRB_from_MIB') in (6, 15, 25, 50, 75, 100) and fields.get('Ng') in ('1/6','1/2','1','2'):
-                        return {
-                            'CellRefP': cellrefp_h,
-                            'PHICHDuration': fields.get('PHICHDuration'),
-                            'Ng': fields.get('Ng'),
-                            'NFrame': fields.get('NFrame'),
-                            'NDLRB_from_MIB': fields.get('NDLRB_from_MIB'),
-                        }
+                mask_val = _PBCH_CRC_MASKS[cellrefp_h]
+                if (got ^ mask_val) != calc:
+                    continue
+                fields = parse_mib_fields(payload, rv)
+                if fields.get('NDLRB_from_MIB') in (6, 15, 25, 50, 75, 100) and fields.get('Ng') in ('1/6', '1/2', '1', '2'):
+                    return {
+                        'CellRefP': cellrefp_h,
+                        'PHICHDuration': fields.get('PHICHDuration'),
+                        'Ng': fields.get('Ng'),
+                        'NFrame': fields.get('NFrame'),
+                        'NDLRB_from_MIB': fields.get('NDLRB_from_MIB'),
+                    }
     return None
 
 

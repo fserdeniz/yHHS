@@ -2,20 +2,18 @@
 
 Analyzes a 5 ms LTE IQ capture and extracts broadcast parameters with a robust, single‑file pipeline. Includes a presentation‑ready Jupyter notebook packed with explanatory visuals.
 
-## Features
 - Input: interleaved float32 I/Q from `LTEIQ.raw` (5 ms, Fs=15.36 MHz, 10 MHz BW)
-- PSS/SSS detection (deterministic SSS generator; FDD + TDD variants)
-  - `NDLRB` (from config/MIB), `CyclicPrefix` (Normal)
-  - `DuplexMode` (FDD/TDD)
-  - `NCellID` (PCI), `NSubframe` (0 or 5)
-- PBCH/MIB decoding (single 5 ms, best‑effort yet strong):
-  - CFO median, common phase, flat EQ
-  - PBCH RE extraction and improved CRS masking (ports 0/1)
-  - LLR + de‑rate matching; scrambler variants; Viterbi; CRC/MIB parsing
-  - Brute‑force fallback over `NCellID`, restricted by `NID2`, with quality gates
-  - Fills `CellRefP`, `PHICHDuration`, `Ng`, `NFrame`, and may refine `NDLRB`
+- PSS/SSS detection:
+  - PSS correlation supports all NID2 ∈ {0,1,2}
+  - **SSS generation now follows 3GPP TS 36.211 § 6.11.2 exactly** (deterministic x_s/x_c/x_z recursions, q/q′ → m₀/m₁, even/odd mapping)
+  - Outputs `NDLRB` (config/MIB), `CyclicPrefix`, `DuplexMode` (FDD/TDD), `NCellID` (PCI), `NSubframe`
+- PBCH/MIB decoding (single 5 ms, work‑in‑progress toward full compliance):
+  - Spec Gold descrambler (TS 36.211 § 6.6.1)
+  - Sub-block interleaver + circular buffer rate matching (TS 36.212 § 5.1.4.2) and tail-biting Viterbi (rate‑1/3, K=7)
+  - Brute-force fallback over `NCellID`, filtered by `NID2`
+  - **Channel equalisation with CRS (TS 36.211 § 6.10.1) is still pending**, so MIB fields are not guaranteed yet
 - TDD extras (heuristic, presentation‑friendly):
-  - Special subframe (subframe 1) detector via center‑band energy
+  - Special subframe (subframe 1) detector via center-band energy
   - UL‑DL configuration index guesser (0..6) using first 5 subframes
 - Notebook with 10+ figures: PSS/SSS correlations, PBCH spectra/scatter, energy heatmaps, LLR histograms, etc. (`notebooks/LTE_Analiz.ipynb`)
 
@@ -58,22 +56,22 @@ Select kernel: `Python (yHHS_env)`.
 
 ### Example Output (single 5 ms file)
 ```
-NDLRB: 15
+NDLRB: 50
 DuplexMode: FDD
 CyclicPrefix: Normal
-NCellID: 7
+NCellID: 88
 NSubframe: 0
-CellRefP: 2
-PHICHDuration: Extended
-Ng: 1/2
-NFrame: 109
+CellRefP: None
+PHICHDuration: None
+Ng: None
+NFrame: None
 ```
+The PBCH/MIB path now uses the spec algorithms but still needs CRS-based equalisation before CRCs match reliably; therefore the MIB-derived fields remain unset in this release build.
 
-## Results and Limitations
-- With 5 ms input, the pipeline reliably outputs: `NDLRB` (or MIB‑refined), `CyclicPrefix`, `DuplexMode`, `NCellID`, `NSubframe`.
-- MIB fields (`CellRefP`, `PHICHDuration`, `Ng`, `NFrame`) are often recovered via PBCH brute‑force even with 5 ms, but remain SNR/recording dependent.
+- With 5 ms input, the pipeline reliably outputs: `NDLRB`, `CyclicPrefix`, `DuplexMode`, `NCellID`, `NSubframe` (SSS now strictly 3GPP-compliant).
+- PBCH fields (`CellRefP`, `PHICHDuration`, `Ng`, `NFrame`) require CRS-based channel equalisation; the current code implements the spec descrambler/interleaver/decoder but still needs that equaliser to pass CRC checks on real captures.
 - Heuristic parts (TDD special subframe/config index) are intended for presentation/triage; longer captures improve accuracy.
-- For production‑grade PBCH, integrate standard‑accurate rate‑matching/interleaving and CRS‑based channel equalization across multiple PBCH transmissions.
+- Production-grade PBCH decoding additionally benefits from multi-frame combining and robust channel estimation.
 
 ## Repository Structure
 - `src/lte_params.py`: PSS/SSS detection, CFO/FFT helpers, high‑level `analyze_lte_iq`

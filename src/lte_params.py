@@ -170,73 +170,79 @@ def detect_pss_across_slots(x: np.ndarray, config: LTEConfig) -> Dict:
  
 
 
+_SSS_BASE_SEQS: Dict[str, np.ndarray] = {}
+
+
+def _sss_base_sequences() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    global _SSS_BASE_SEQS
+    if not _SSS_BASE_SEQS:
+        # x_s recursion: x_s(n+5) = x_s(n+2) + x_s(n) (mod 2)
+        x_s = np.zeros(31, dtype=np.uint8)
+        x_s[:5] = np.array([0, 0, 0, 0, 1], dtype=np.uint8)
+        for i in range(26):
+            x_s[i + 5] = (x_s[i + 2] + x_s[i]) & 1
+        s_tilde = 1 - 2 * x_s
+
+        # x_c recursion: x_c(n+5) = x_c(n+3) + x_c(n) (mod 2)
+        x_c = np.zeros(31, dtype=np.uint8)
+        x_c[:5] = np.array([0, 0, 0, 0, 1], dtype=np.uint8)
+        for i in range(26):
+            x_c[i + 5] = (x_c[i + 3] + x_c[i]) & 1
+        c_tilde = 1 - 2 * x_c
+
+        # x_z recursion: x_z(n+5) = x_z(n+4)+x_z(n+2)+x_z(n+1)+x_z(n) (mod 2)
+        x_z = np.zeros(31, dtype=np.uint8)
+        x_z[:5] = np.array([0, 0, 0, 0, 1], dtype=np.uint8)
+        for i in range(26):
+            x_z[i + 5] = (x_z[i + 4] + x_z[i + 2] + x_z[i + 1] + x_z[i]) & 1
+        z_tilde = 1 - 2 * x_z
+
+        _SSS_BASE_SEQS = {
+            's': s_tilde.astype(np.int8),
+            'c': c_tilde.astype(np.int8),
+            'z': z_tilde.astype(np.int8),
+        }
+    return (_SSS_BASE_SEQS['s'], _SSS_BASE_SEQS['c'], _SSS_BASE_SEQS['z'])
+
+
 def generate_sss_fd(nfft: int, nid1: int, nid2: int, is_subframe0: bool, fdd: bool = True, tdd_variant: int = 0) -> np.ndarray:
-    """Generate an SSS sequence (62 BPSK chips) mapped around DC.
+    """Generate LTE SSS per 3GPP TS 36.211 6.11.2 (Normal CP).
 
-    This implementation follows the spirit of 36.211 6.11.2: two length-31
-    m-sequences combined with nid1-derived cyclic shifts (m0,m1) and an nid2
-    dependent sequence. While simplified, it is deterministic and correlates
-    meaningfully across nid1 hypotheses.
+    The sequence is purely BPSK (±1) mapped to the centre 62 subcarriers. For TDD this
+    implementation reuses the FDD formulation; subframe numbering logic is handled by
+    the caller.
     """
-    def lfsr_seq31(poly_taps: Tuple[int, ...]) -> np.ndarray:
-        # poly taps include feedback tap positions relative to current index,
-        # e.g., (3, 0) corresponds to x^31 + x^3 + 1
-        x = np.zeros(31 + 31, dtype=np.uint8)
-        x[0] = 1
-        for n in range(31, x.size):
-            fb = 0
-            for t in poly_taps:
-                fb ^= x[n - 31 + t]
-            x[n] = fb & 1
-        return x[:31]
+    s_tilde, c_tilde, z_tilde = _sss_base_sequences()
 
-    # Base sequences (binary 0/1 -> BPSK +1/-1)
-    s_bin = lfsr_seq31((3, 0))
-    c_bin = lfsr_seq31((3, 2, 1, 0))
-    z_bin = lfsr_seq31((3, 0))
-    s_bpsk = 1 - 2 * s_bin
-    c_bpsk = 1 - 2 * c_bin
-    z_bpsk = 1 - 2 * z_bin
-
-    # nid1 to m0, m1 (common decomposition used in literature)
     q_prime = nid1 // 30
-    q_pp = nid1 % 30
-    m0 = (q_prime + (q_pp // 5) + 1) % 31
-    m1 = (q_prime + (q_pp % 5) + 1) % 31
+    q = q_prime // 2
+    m_prime = nid1 + (q * (q + 1)) // 2
+    m0 = m_prime % 31
+    m1 = (m0 + (m_prime // 31) + 1) % 31
 
-    # Build two 31-chip sequences by cyclic shifts and products
-    a = s_bpsk[(np.arange(31) + m0) % 31] * c_bpsk[(np.arange(31)) % 31]
-    b = s_bpsk[(np.arange(31) + m1) % 31] * c_bpsk[(np.arange(31) + m0) % 31]
+    # Helper lambdas for shifts
+    def shift(arr: np.ndarray, offset: int) -> np.ndarray:
+        idx = (np.arange(31) + offset) % 31
+        return arr[idx]
 
-    # nid2-dependent sequence (cyclic shift of z)
-    z = z_bpsk[(np.arange(31) + (nid2 % 31)) % 31]
+    s0 = shift(s_tilde, m0)
+    s1 = shift(s_tilde, m1)
+    c0 = shift(c_tilde, nid2)
+    c1 = shift(c_tilde, (nid2 + 3) % 31)
+    z0 = shift(z_tilde, m0 % 8)
+    z1 = shift(z_tilde, m1 % 8)
 
-    if fdd:
-        # FDD mapping
-        if is_subframe0:
-            d_even = a
-            d_odd = b * z
-        else:
-            d_even = b
-            d_odd = a * z
+    if is_subframe0:
+        d_even = s0 * c0
+        d_odd = s1 * c1 * z0
     else:
-        # TDD mapping nuances: swap roles and/or apply sign alternation on odd chips.
-        # Variant 0: swap compared to FDD
-        if is_subframe0:
-            d_even = b * z
-            d_odd = a
-        else:
-            d_even = a * z
-            d_odd = b
-        if tdd_variant == 1:
-            # Apply alternating sign to odd positions (empirical robustness)
-            d_odd = -d_odd
+        d_even = s1 * c0
+        d_odd = s0 * c1 * z1
 
-    seq62 = np.empty(62, dtype=np.complex64)
-    seq62[0::2] = d_even.astype(np.complex64)
-    seq62[1::2] = d_odd.astype(np.complex64)
+    seq62 = np.empty(62, dtype=np.int8)
+    seq62[0::2] = d_even.astype(np.int8)
+    seq62[1::2] = d_odd.astype(np.int8)
 
-    # Map to nfft around DC
     X = np.zeros(nfft, dtype=np.complex64)
     dc = nfft // 2
     X[dc-31:dc] = seq62[:31]
@@ -254,20 +260,13 @@ def sss_detect_in_symbol(fft_sym: np.ndarray, nfft: int, nid2: int) -> Tuple[Opt
     for fdd in (True, False):
         for is_sf0 in (True, False):
             for nid1 in range(168):
-                if fdd:
-                    refs = (generate_sss_fd(nfft, nid1, nid2, is_sf0, True),)
-                else:
-                    refs = (
-                        generate_sss_fd(nfft, nid1, nid2, is_sf0, False, 0),
-                        generate_sss_fd(nfft, nid1, nid2, is_sf0, False, 1),
-                    )
-                for ref in refs:
-                    ref_bins = np.concatenate([ref[dc-31:dc], ref[dc+1:dc+32]])
-                    num = np.vdot(ref_bins, sym_bins)
-                    den = np.linalg.norm(sym_bins) * np.linalg.norm(ref_bins) + 1e-12
-                    m = np.abs(num) / den
-                    if m > best[1]:
-                        best = (nid1, float(m), is_sf0, fdd)
+                ref = generate_sss_fd(nfft, nid1, nid2, is_sf0, fdd)
+                ref_bins = np.concatenate([ref[dc-31:dc], ref[dc+1:dc+32]])
+                num = np.vdot(ref_bins, sym_bins)
+                den = np.linalg.norm(sym_bins) * np.linalg.norm(ref_bins) + 1e-12
+                m = np.abs(num) / den
+                if m > best[1]:
+                    best = (nid1, float(m), is_sf0, fdd)
     return best
 
 
