@@ -4,7 +4,7 @@
 ### Added
 - Formal changelog documenting repository modifications.
 
-## [2025-10-15] - Standards Alignment Sprint
+## [2025-10-16] - Standards Alignment Sprint
 ### Added
 - Implemented 3GPP TS 36.211 §6.11.2 compliant SSS generator (deterministic x_s/x_c/x_z recursions, q/q′ → m₀/m₁).
 - Added spec-aligned PBCH descrambler using LTE Gold sequence (TS 36.211 §6.6.1).
@@ -19,4 +19,3 @@
 
 ### Known Issues
 - PBCH CRC still fails on sample capture pending CRS-based channel estimation; MIB fields remain `None` in CLI output.
-
