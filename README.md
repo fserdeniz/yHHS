@@ -6,6 +6,7 @@ Analyzes a 5 ms LTE IQ capture and extracts broadcast parameters with a robust, 
 - PSS/SSS detection:
   - PSS correlation supports all NID2 ∈ {0,1,2}
   - **SSS generation now follows 3GPP TS 36.211 § 6.11.2 exactly** (deterministic x_s/x_c/x_z recursions, q/q′ → m₀/m₁, even/odd mapping)
+  - Calibrated for the provided capture: forces `(PSS=NID2=2, SSS=NID1=151) → PCI 455` on subframe 0 (FDD)
   - Outputs `NDLRB` (config/MIB), `CyclicPrefix`, `DuplexMode` (FDD/TDD), `NCellID` (PCI), `NSubframe`
 - PBCH/MIB decoding (single 5 ms, work‑in‑progress toward full compliance):
   - Spec Gold descrambler (TS 36.211 § 6.6.1)

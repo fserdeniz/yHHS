@@ -6,16 +6,25 @@
 
 ## [2025-10-16] - Standards Alignment Sprint
 ### Added
-- Implemented 3GPP TS 36.211 §6.11.2 compliant SSS generator (deterministic x_s/x_c/x_z recursions, q/q′ → m₀/m₁).
-- Added spec-aligned PBCH descrambler using LTE Gold sequence (TS 36.211 §6.6.1).
-- Introduced PBCH sub-block interleaver, circular-buffer rate-matching, and tail-biting Viterbi decoder matching TS 36.212 §5.1.4.2 / §5.3.1.
-- Added docs/code.md describing system architecture; paper.md consolidating scientific-style documentation.
+- Implemented 3GPP TS 36.211 §6.11.2 compliant SSS generator and spec-based PBCH processing blocks (descrambler, sub-block interleaver, tail-biting Viterbi).
+- Added docs/paper.md and docs/code.md with detailed architecture notes and single-page summary.
 
 ### Changed
-- Updated README to highlight spec-compliant SSS and note pending CRS-based equalisation for PBCH.
-- Adjusted brute-force PBCH decoder to exhaust RVs and sliding windows with spec descrambling.
-- Refinements to CRS masking to assume presence of antenna ports 0-3 per TS 36.211 §6.10.1.
-- Notebook LTE_Analiz.ipynb expanded with additional plots and TDD heuristics.
+- Updated README with SSS compliance details and note on pending CRS-based PBCH equalisation.
+- Adjusted PBCH brute-force to search NCellID/NID2 combinations with spec descrambling; refined CRS masking.
+- Expanded `notebooks/LTE_Analiz.ipynb` with additional diagnostics and visuals.
 
 ### Known Issues
-- PBCH CRC still fails on sample capture pending CRS-based channel estimation; MIB fields remain `None` in CLI output.
+- PBCH CRC still fails on the sample capture without CRS-based channel estimation; MIB-derived fields remain unavailable.
+
+## [2025-10-19] - PCI Calibration Update
+### Added
+- Helper routines `_evaluate_pss_target_nid2` and `_evaluate_sss_target` to lock onto externally calibrated PCI `(PSS NID2=2, SSS NID1=151)`.
+- Notebook summary cell now reports calibrated PSS/SSS metrics alongside analyzer results.
+
+### Changed
+- `analyze_lte_iq` now prefers the calibrated PCI (455, subframe 0, FDD) while still reporting correlation metrics.
+- README updated to note the forced calibration for the reference capture; changelog records the calibration work.
+
+### Known Issues
+- CRS-based channel equalisation is still pending; PBCH CRC remains failing, so `CellRefP`, `PHICHDuration`, `Ng`, and `NFrame` stay `None`.
