@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import signal
 from dataclasses import dataclass
 from typing import Tuple, Dict, Optional
 
@@ -74,6 +75,30 @@ def generate_pss_fd(nfft: int, nid2: int) -> np.ndarray:
     return X
 
 
+def generate_pss_td(nfft: int, nid2: int) -> np.ndarray:
+    """Return time-domain PSS (IFFT of frequency-domain sequence)."""
+    fd = generate_pss_fd(nfft, nid2)
+    return np.fft.ifft(np.fft.ifftshift(fd))
+
+
+def _symbol_lengths(config: LTEConfig) -> Tuple[int, ...]:
+    return tuple(int(config.cp_slot[i] + config.nfft) for i in range(config.symbols_per_slot))
+
+
+def pss_symbol_offset_samples(config: LTEConfig) -> int:
+    """Offset (samples) from subframe start to the beginning of PSS (including CP)."""
+    sym_lengths = _symbol_lengths(config)
+    slot0 = sum(sym_lengths)
+    return slot0 + sum(sym_lengths[:6])
+
+
+def sss_symbol_offset_samples(config: LTEConfig) -> int:
+    """Offset (samples) from subframe start to the beginning of SSS (including CP)."""
+    sym_lengths = _symbol_lengths(config)
+    slot0 = sum(sym_lengths)
+    return slot0 + sum(sym_lengths[:5])
+
+
 def pss_detect_in_symbol(fft_sym: np.ndarray, nfft: int) -> Tuple[int, float]:
     """Return (nid2, metric) via correlation of center 62 bins with expected PSS.
     fft_sym: FFT of an OFDM symbol (length nfft)
@@ -132,38 +157,41 @@ def fft_symbol(x: np.ndarray, start: int, cp_len: int, nfft: int, cfo: float = 0
 
 
 def detect_pss_across_slots(x: np.ndarray, config: LTEConfig) -> Dict:
-    """Search each slot's last symbol for PSS; return details for the best match.
+    """Matched-filter search for PSS across the capture (MATLAB-style cell search).
 
-    Assumes Normal CP timing and that the capture is reasonably aligned to a subframe boundary.
+    Returns dict with keys:
+      'nid2'          : detected NID2 (0..2)
+      'metric'        : normalised correlation metric in [0, 1]
+      'sample_index'  : starting sample index of the detected PSS symbol (CP included)
     """
-    best = {
-        'slot_index': None,
-        'symbol_index': None,
-        'nid2': None,
-        'metric': -1.0,
-        'cfo': 0.0,
-    }
-    total_slots = (len(x) // config.slot_samples)
-    for slot in range(total_slots):
-        slot_start = slot * config.slot_samples
-        # symbol 6 (0-based) is the last symbol in the slot
-        cp = config.cp_slot[6]
-        sym_start = slot_start
-        # accumulate within slot to symbol 6
-        for l in range(6):
-            sym_start += config.cp_slot[l] + config.nfft
-        # Coarse CFO from CP
-        cfo = coarse_cfo_estimate(x[sym_start:sym_start+config.cp_slot[6]+config.nfft], config.cp_slot[6], config.nfft)
-        F = fft_symbol(x, sym_start, config.cp_slot[6], config.nfft, cfo)
-        nid2, m = pss_detect_in_symbol(F, config.nfft)
-        if m > best['metric']:
-            best.update({
-                'slot_index': slot,
-                'symbol_index': slot * 7 + 6,
-                'nid2': nid2,
-                'metric': m,
-                'cfo': cfo,
-            })
+    cp_pss = int(config.cp_slot[6])
+    best = {'nid2': None, 'metric': -1.0, 'sample_index': None}
+    signal_energy = np.abs(x) ** 2
+    for nid2 in (0, 1, 2):
+        td = generate_pss_td(config.nfft, nid2)
+        ref = np.concatenate([td[-cp_pss:], td])
+        ref_energy = float(np.sum(np.abs(ref) ** 2) + 1e-12)
+        mf = np.conjugate(ref[::-1])
+        corr = signal.fftconvolve(x, mf, mode='valid')
+        power = np.abs(corr) ** 2
+        idx = int(np.argmax(power))
+        window_energy = float(np.sum(signal_energy[idx:idx + ref.size]) + 1e-12)
+        metric = float(power[idx] / (ref_energy * window_energy + 1e-12))
+        if metric > best['metric']:
+            best.update({'nid2': nid2, 'metric': metric, 'sample_index': idx})
+    if best['sample_index'] is not None:
+        slot_idx = best['sample_index'] // config.slot_samples
+        best['slot_index'] = int(slot_idx)
+        best['symbol_index'] = int(slot_idx * config.symbols_per_slot + 6)
+        seg = x[best['sample_index']:best['sample_index'] + cp_pss + config.nfft]
+        if seg.size >= (cp_pss + config.nfft):
+            best['cfo'] = float(coarse_cfo_estimate(seg, cp_pss, config.nfft))
+        else:
+            best['cfo'] = 0.0
+    else:
+        best['slot_index'] = None
+        best['symbol_index'] = None
+        best['cfo'] = 0.0
     return best
 
 
@@ -177,20 +205,20 @@ def _sss_base_sequences() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return base sequences s~, c~, z~ per 3GPP TS 36.211 6.11.2."""
     global _SSS_BASE_SEQS
     if not _SSS_BASE_SEQS:
-        x_init = np.zeros(31, dtype=np.uint8)
-        x_init[4] = 1
+        x = np.zeros(31, dtype=np.uint8)
+        x[4] = 1
 
-        xs = x_init.copy()
+        xs = x.copy()
         for i in range(26):
             xs[i + 5] = (xs[i + 2] + xs[i]) & 1
         s_tilde = (1 - 2 * xs).astype(np.int8)
 
-        xc = x_init.copy()
+        xc = x.copy()
         for i in range(26):
             xc[i + 5] = (xc[i + 3] + xc[i]) & 1
         c_tilde = (1 - 2 * xc).astype(np.int8)
 
-        xz = x_init.copy()
+        xz = x.copy()
         for i in range(26):
             xz[i + 5] = (xz[i + 4] + xz[i + 2] + xz[i + 1] + xz[i]) & 1
         z_tilde = (1 - 2 * xz).astype(np.int8)
@@ -266,70 +294,11 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
     # 10 MHz with Normal CP -> slot_samples = 7680. Our capture length is a multiple of 7680.
     results['CyclicPrefix'] = 'Normal'
 
-    def _evaluate_pss_target_nid2(target_nid2: int) -> Optional[Dict[str, object]]:
-        best = {'metric': -1.0, 'slot_index': None, 'cfo': 0.0}
-        total_slots = len(x) // config.slot_samples
-        for slot_idx in range(total_slots):
-            base = slot_idx * config.slot_samples
-            sym_start = base
-            for l in range(6):
-                sym_start += config.cp_slot[l] + config.nfft
-            cp_len = config.cp_slot[6]
-            end = sym_start + cp_len + config.nfft
-            if end > len(x):
-                continue
-            seg = x[sym_start:end]
-            r = np.vdot(seg[:cp_len], seg[config.nfft:config.nfft + cp_len])
-            cfo = np.angle(r) / config.nfft
-            F = fft_symbol(x, sym_start, cp_len, config.nfft, cfo)
-            dc = config.nfft // 2
-            obs = np.concatenate([F[dc-31:dc], F[dc+1:dc+32]])
-            ref = generate_pss_fd(config.nfft, target_nid2)
-            ref_bins = np.concatenate([ref[dc-31:dc], ref[dc+1:dc+32]])
-            den = np.linalg.norm(obs) * np.linalg.norm(ref_bins) + 1e-12
-            metric = np.abs(np.vdot(ref_bins, obs)) / den
-            if metric > best['metric']:
-                best.update({'metric': float(metric), 'slot_index': slot_idx, 'cfo': float(cfo)})
-        return best if best['slot_index'] is not None else None
-
-    def _evaluate_sss_target(slot_idx: int, target_nid1: int, target_nid2: int, cfo: float) -> Optional[Dict[str, object]]:
-        subframe_idx = slot_idx // 2
-        subframe_start = subframe_idx * config.subframe_samples
-        sym_starts = symbol_starts_for_subframe(config, subframe_start)
-        cp_vec = cp_lengths_normal(config)
-        local_last = 6 if (slot_idx % 2) == 0 else 13
-        sss_local = local_last - 1
-        start = sym_starts[sss_local]
-        cp_len = int(cp_vec[sss_local])
-        end = start + cp_len + config.nfft
-        if end > len(x):
-            return None
-        F_sss = fft_symbol(x, start, cp_len, config.nfft, cfo)
-        dc = config.nfft // 2
-        obs = np.concatenate([F_sss[dc-31:dc], F_sss[dc+1:dc+32]])
-        ref = generate_sss_fd(config.nfft, target_nid1, target_nid2, True, True)
-        ref_bins = np.concatenate([ref[dc-31:dc], ref[dc+1:dc+32]])
-        den = np.linalg.norm(obs) * np.linalg.norm(ref_bins) + 1e-12
-        metric = np.abs(np.vdot(ref_bins, obs)) / den
-        return {'metric': float(metric)}
-
-    # Detect PSS across slots to find PCI group (NID2) and rough timing/CFO
+    # Detect PSS via matched filter to find PCI group (NID2) and initial timing/CFO
     pss = detect_pss_across_slots(x, config)
     results['PSS_metric'] = pss['metric']
     results['NID2'] = pss['nid2']
-    results['Estimated_CFO_rad_per_sample'] = pss['cfo']
-
-    # Override with calibrated PCI information if available
-    forced_nid2 = 2
-    forced_nid1 = 151
-    forced_pss = _evaluate_pss_target_nid2(forced_nid2)
-    if forced_pss is not None:
-        pss.update({'nid2': forced_nid2, 'metric': forced_pss['metric'], 'slot_index': forced_pss['slot_index'], 'cfo': forced_pss['cfo']})
-        results['PSS_metric'] = forced_pss['metric']
-        results['Estimated_CFO_rad_per_sample'] = forced_pss['cfo']
-        results['NID2'] = forced_nid2
-
-    if pss['slot_index'] is None:
+    if pss['sample_index'] is None or pss['nid2'] is None:
         # If PSS failed, we cannot proceed further
         results.update({
             'NCellID': None,
@@ -342,49 +311,79 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
             'NFrame': None,
             'Note': 'PSS not reliably detected; more data or SNR needed.'
         })
+        results['Estimated_CFO_rad_per_sample'] = 0.0
         return results
+    cp_pss = int(config.cp_slot[6])
+    pss_start = int(pss['sample_index'])
+    seg_pss = x[pss_start:pss_start + cp_pss + config.nfft]
+    if seg_pss.size < (cp_pss + config.nfft):
+        results.update({
+            'NCellID': None,
+            'NID1': None,
+            'DuplexMode': None,
+            'NSubframe': None,
+            'CellRefP': None,
+            'PHICHDuration': None,
+            'Ng': None,
+            'NFrame': None,
+            'Note': 'Capture truncated around detected PSS; unable to continue.'
+        })
+        results['Estimated_CFO_rad_per_sample'] = 0.0
+        return results
+    cfo = coarse_cfo_estimate(seg_pss, cp_pss, config.nfft)
+    pss['cfo'] = float(cfo)
+    results['Estimated_CFO_rad_per_sample'] = float(cfo)
 
-    # Identify the symbol immediately preceding PSS to detect SSS
+    # Align capture so subframe 0 (containing detected PSS) starts at sample 0
+    pss_offset = pss_symbol_offset_samples(config)
+    frame_offset = (pss_start - pss_offset) % len(x)
+    results['FrameOffsetSamples'] = int(frame_offset)
+    x_aligned = np.roll(x, -frame_offset) if frame_offset != 0 else x.copy()
+
+    # Update PSS bookkeeping using aligned reference
+    pss_aligned_start = pss_offset
+    pss['sample_index'] = pss_aligned_start
+    pss['slot_index'] = pss_aligned_start // config.slot_samples
+    pss['symbol_index'] = pss['slot_index'] * config.symbols_per_slot + 6
+
+    # Identify the symbol immediately preceding PSS to detect SSS (using aligned capture)
     slot = int(pss['slot_index'])
-    forced_sss = _evaluate_sss_target(slot, forced_nid1, forced_nid2, pss['cfo'])
-    if forced_sss is not None:
-        results['SSS_metric'] = forced_sss['metric']
-        nid1 = forced_nid1
-        is_subframe0 = True
-        is_fdd = True
-    else:
-        subframe_idx = (slot // 2)
-        subframe_start = subframe_idx * config.subframe_samples
-        sym_starts = symbol_starts_for_subframe(config, subframe_start)
-        cp_vec = cp_lengths_normal(config)
-        local_last = 6 if (slot % 2) == 0 else 13
-        sss_local = local_last - 1
-        F_sss = fft_symbol(x, sym_starts[sss_local], int(cp_vec[sss_local]), config.nfft, pss['cfo'])
-        nid1, m_sss, is_subframe0, is_fdd = sss_detect_in_symbol(F_sss, config.nfft, int(pss['nid2']))
-        results['SSS_metric'] = m_sss
-        if nid1 is None:
-            nid1 = forced_nid1
+    subframe_idx = slot // config.slots_per_subframe
+    subframe_start = subframe_idx * config.subframe_samples
+    sym_starts = symbol_starts_for_subframe(config, subframe_start)
+    cp_vec = cp_lengths_normal(config)
+    slot_local = slot % config.slots_per_subframe
+    local_last = ((slot_local + 1) * config.symbols_per_slot) - 1
+    sss_local = max(local_last - 1, 0)
+    F_sss = fft_symbol(x_aligned, int(sym_starts[sss_local]), int(cp_vec[sss_local]), config.nfft, pss['cfo'])
+    nid1, m_sss, is_subframe0, is_fdd = sss_detect_in_symbol(F_sss, config.nfft, int(pss['nid2']))
+    results['SSS_metric'] = m_sss
 
     # Duplex mode from SSS hypothesis
-    results['DuplexMode'] = 'FDD' if is_fdd else 'TDD'
-
-    # Subframe index: if SSS indicates subframe 0 placement vs 5
-    # Our 5 ms capture likely contains only 0..4. If SSS says subframe 5, report 5.
-    results['NSubframe'] = 0 if is_subframe0 else 5
-
-    results['NID1'] = nid1
-    results['NCellID'] = 3 * int(nid1) + int(pss['nid2'])
+    if nid1 is not None:
+        results['NID1'] = int(nid1)
+        results['DuplexMode'] = 'FDD' if is_fdd else 'TDD'
+        results['NSubframe'] = 0 if is_subframe0 else 5
+        if results['NID2'] is not None:
+            results['NCellID'] = 3 * int(nid1) + int(pss['nid2'])
+        else:
+            results['NCellID'] = None
+    else:
+        results['NID1'] = None
+        results['DuplexMode'] = None
+        results['NSubframe'] = None
+        results['NCellID'] = None
 
     # If TDD, try to detect special subframe at subframe 1 (heuristic)
-    if not is_fdd:
+    if (nid1 is not None) and (not is_fdd):
         try:
-            tdd_info = detect_tdd_special_subframe(x, config)
+            tdd_info = detect_tdd_special_subframe(x_aligned, config)
             results.update(tdd_info)
         except Exception:
             results['TDD_SpecialSubframe1'] = None
             results['TDD_SpecialSubframe1_Ratio'] = None
         try:
-            cfg_info = detect_tdd_config(x, config)
+            cfg_info = detect_tdd_config(x_aligned, config)
             results.update(cfg_info)
         except Exception:
             results['TDD_ConfigIndex'] = None
@@ -395,8 +394,8 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
         from .pbch import extract_pbch_re, estimate_common_phase, apply_phase, normalize_amplitude, try_decode_mib_from_pbch, brute_force_mib_from_pbch
         # Subframe-wide CFO estimate improves PBCH LLRs
         sf_idx = 0  # PBCH resides in subframe 0
-        cfo_sf = estimate_cfo_for_subframe(x, config, sf_idx)
-        pbch_re = extract_pbch_re(x, config, sf_idx, cfo_sf)
+        cfo_sf = estimate_cfo_for_subframe(x_aligned, config, sf_idx)
+        pbch_re = extract_pbch_re(x_aligned, config, sf_idx, cfo_sf)
         theta = estimate_common_phase(pbch_re)
         pbch_eq = apply_phase(pbch_re, theta)
         pbch_eq = normalize_amplitude(pbch_eq)

@@ -4,9 +4,9 @@ Analyzes a 5 ms LTE IQ capture and extracts broadcast parameters with a robust, 
 
 - Input: interleaved float32 I/Q from `LTEIQ.raw` (5 ms, Fs=15.36 MHz, 10 MHz BW)
 - PSS/SSS detection:
-  - PSS correlation supports all NID2 ∈ {0,1,2}
+  - PSS correlation uses a matched-filter search mirroring MATLAB `lteCellSearch`, providing robust timing, CFO, and frame-align offsets for all NID2 ∈ {0,1,2}
   - **SSS generation now follows 3GPP TS 36.211 § 6.11.2 exactly** (deterministic x_s/x_c/x_z recursions, q/q′ → m₀/m₁, even/odd mapping)
-  - Calibrated for the provided capture: forces `(PSS=NID2=2, SSS=NID1=151) → PCI 455` on subframe 0 (FDD)
+  - Auto-detects PCI directly from the capture (no hard-coded calibration), reporting the best-match `(NID1, NID2)` / PCI and SSS-derived subframe/duplex hypotheses
   - Outputs `NDLRB` (config/MIB), `CyclicPrefix`, `DuplexMode` (FDD/TDD), `NCellID` (PCI), `NSubframe`
 - PBCH/MIB decoding (single 5 ms, work‑in‑progress toward full compliance):
   - Spec Gold descrambler (TS 36.211 § 6.6.1)
@@ -60,7 +60,7 @@ Select kernel: `Python (yHHS_env)`.
 NDLRB: 50
 DuplexMode: FDD
 CyclicPrefix: Normal
-NCellID: 88
+NCellID: 455
 NSubframe: 0
 CellRefP: None
 PHICHDuration: None
@@ -70,6 +70,7 @@ NFrame: None
 The PBCH/MIB path now uses the spec algorithms but still needs CRS-based equalisation before CRCs match reliably; therefore the MIB-derived fields remain unset in this release build.
 
 - With 5 ms input, the pipeline reliably outputs: `NDLRB`, `CyclicPrefix`, `DuplexMode`, `NCellID`, `NSubframe` (SSS now strictly 3GPP-compliant).
+- The analyzer also reports `FrameOffsetSamples`, the sample index shift required to align the capture so that subframe 0 starts at sample 0.
 - PBCH fields (`CellRefP`, `PHICHDuration`, `Ng`, `NFrame`) require CRS-based channel equalisation; the current code implements the spec descrambler/interleaver/decoder but still needs that equaliser to pass CRC checks on real captures.
 - Heuristic parts (TDD special subframe/config index) are intended for presentation/triage; longer captures improve accuracy.
 - Production-grade PBCH decoding additionally benefits from multi-frame combining and robust channel estimation.
