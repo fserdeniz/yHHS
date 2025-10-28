@@ -21,7 +21,7 @@ class LTEConfig:
 def read_iq_file(path: str) -> np.ndarray:
     """Read interleaved float32 IQ as complex64 array.
 
-    The provided MATLAB code loads as [I; Q] pairs. This loader mirrors that.
+    The acquisition script stores samples as interleaved I/Q float32 pairs; this loader reproduces that layout.
     """
     raw = np.fromfile(path, dtype=np.float32)
     if raw.size % 2 != 0:
@@ -158,7 +158,7 @@ def fft_symbol(x: np.ndarray, start: int, cp_len: int, nfft: int, cfo: float = 0
 
 
 def detect_pss_across_slots(x: np.ndarray, config: LTEConfig) -> Dict:
-    """Matched-filter search for PSS across the capture (MATLAB-style cell search).
+    """Matched-filter search for PSS across the capture following standard LTE cell-search logic.
 
     Returns dict with keys:
       'nid2'          : detected NID2 (0..2)
@@ -298,7 +298,7 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
     results['CyclicPrefix'] = 'Normal'
 
     # Detect PSS via matched filter to find PCI group (NID2) and initial timing/CFO
-    # (mirrors MATLAB LTE Toolbox cell search behaviour)
+    # (matches the 3GPP cell-search procedure implemented by typical toolchains)
     pss = detect_pss_across_slots(x, config)
     results['PSS_metric'] = pss['metric']
     results['NID2'] = pss['nid2']
@@ -339,7 +339,7 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
     results['Estimated_CFO_rad_per_sample'] = float(cfo)
 
     # Align capture so subframe 0 (containing detected PSS) starts at sample 0
-    # (equivalent to MATLAB's frame timing adjustment after cell search)
+    # (standard frame-timing adjustment derived from the detected PSS index)
     pss_offset = pss_symbol_offset_samples(config)
     frame_offset = (pss_start - pss_offset) % len(x)
     results['FrameOffsetSamples'] = int(frame_offset)

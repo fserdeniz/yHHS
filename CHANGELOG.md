@@ -5,7 +5,7 @@
 - Formal changelog documenting repository modifications.
 ### Changed
 - Removed hard-coded PCI calibration; PSS/SSS detection and notebook now rely solely on 3GPP-compliant auto-detection paths.
-- Replaced slot-scanning PSS detection with MATLAB-style matched filtering, reporting frame offsets and recovering the expected PCI 455 (PSS 2, SSS 151) from the reference capture.
+- Replaced slot-scanning PSS detection with a spec-style matched filter, reporting frame offsets and recovering the expected PCI 455 (PSS 2, SSS 151) from the reference capture.
 
 ## [2025-10-16] - Standards Alignment Sprint
 ### Added

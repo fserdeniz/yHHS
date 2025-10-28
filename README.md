@@ -4,7 +4,7 @@ Analyzes a 5 ms LTE IQ capture and extracts broadcast parameters with a robust, 
 
 - Input: interleaved float32 I/Q from `LTEIQ.raw` (5 ms, Fs=15.36 MHz, 10 MHz BW)
 - PSS/SSS detection:
-  - PSS correlation uses a matched-filter search mirroring MATLAB `lteCellSearch`, providing robust timing, CFO, and frame-align offsets for all NID2 ∈ {0,1,2}
+  - PSS correlation uses a matched-filter search comparable to standard LTE cell-search implementations, providing robust timing, CFO, and frame-align offsets for all NID2 ∈ {0,1,2}
   - **SSS generation now follows 3GPP TS 36.211 § 6.11.2 exactly** (deterministic x_s/x_c/x_z recursions, q/q′ → m₀/m₁, even/odd mapping)
   - Auto-detects PCI directly from the capture (no hard-coded calibration), reporting the best-match `(NID1, NID2)` / PCI and SSS-derived subframe/duplex hypotheses
   - Outputs `NDLRB` (config/MIB), `CyclicPrefix`, `DuplexMode` (FDD/TDD), `NCellID` (PCI), `NSubframe`
@@ -80,6 +80,7 @@ The PBCH/MIB path now uses the spec algorithms but still needs CRS-based equalis
 - PBCH fields (`CellRefP`, `PHICHDuration`, `Ng`, `NFrame`) require CRS-based channel equalisation; the current code implements the spec descrambler/interleaver/decoder but still needs that equaliser to pass CRC checks on real captures.
 - Heuristic parts (TDD special subframe/config index) are intended for presentation/triage; longer captures improve accuracy.
 - Production-grade PBCH decoding additionally benefits from multi-frame combining and robust channel estimation.
+- Processing steps are informed by MATLAB/Simulink LTE workflows, but every routine here is an independent Python implementation.
 
 ## Repository Structure
 - `src/lte_params.py`: PSS/SSS detection, CFO/FFT helpers, high‑level `analyze_lte_iq`
