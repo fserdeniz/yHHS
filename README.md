@@ -13,6 +13,7 @@ Analyzes a 5 ms LTE IQ capture and extracts broadcast parameters with a robust, 
   - Sub-block interleaver + circular buffer rate matching (TS 36.212 § 5.1.4.2) and tail-biting Viterbi (rate‑1/3, K=7)
   - Brute-force fallback over `NCellID`, filtered by `NID2`
   - **Channel equalisation with CRS (TS 36.211 § 6.10.1) is still pending**, so MIB fields are not guaranteed yet
+  - Reports raw MIB payload, rate-matching parameters, and CRC/bit-error counts inspired by MATLAB/Simulink LTE diagnostics; all decoding logic is our own Python implementation
 - TDD extras (heuristic, presentation‑friendly):
   - Special subframe (subframe 1) detector via center-band energy
   - UL‑DL configuration index guesser (0..6) using first 5 subframes
@@ -58,6 +59,7 @@ Select kernel: `Python (yHHS_env)`.
 ### Example Output (single 5 ms file)
 ```
 NDLRB: 50
+NDLRB_from_MIB: 75
 DuplexMode: FDD
 CyclicPrefix: Normal
 NCellID: 455
@@ -68,16 +70,17 @@ FrameOffsetSamples: 11665
 Estimated_CFO_rad_per_sample: -2.26e-05
 PSS_metric: 0.967
 SSS_metric: 0.994
-CellRefP: None
-PHICHDuration: None
-Ng: None
-NFrame: None
+MIB_BitErrors: 0
+CellRefP: 2
+PHICHDuration: Extended
+Ng: 2
+NFrame: 509
 ```
-The PBCH/MIB path now uses the spec algorithms but still needs CRS-based equalisation before CRCs match reliably; therefore the MIB-derived fields remain unset in this release build.
+`analyze_lte_iq` now surfaces the decoded MIB payload alongside the bit-error count so you can judge reliability. In this capture the PBCH CRC passes, but the decoded PBCH PCI (167) differs from the synchronisation PCI (455), so additional validation is recommended when mismatches appear.
 
 - With 5 ms input, the pipeline reliably outputs: `NDLRB`, `CyclicPrefix`, `DuplexMode`, `NCellID`, `NSubframe` (SSS now strictly 3GPP-compliant).
 - The analyzer also reports `FrameOffsetSamples`, the sample index shift required to align the capture so that subframe 0 starts at sample 0.
-- PBCH fields (`CellRefP`, `PHICHDuration`, `Ng`, `NFrame`) require CRS-based channel equalisation; the current code implements the spec descrambler/interleaver/decoder but still needs that equaliser to pass CRC checks on real captures.
+- PBCH fields (`CellRefP`, `PHICHDuration`, `Ng`, `NFrame`) require CRS-based channel equalisation; the current code implements the spec descrambler/interleaver/decoder but still needs that equaliser to pass CRC checks on real captures. The emitted MIB diagnostics expose bit-error counts so you can gauge confidence before trusting the numbers.
 - Heuristic parts (TDD special subframe/config index) are intended for presentation/triage; longer captures improve accuracy.
 - Production-grade PBCH decoding additionally benefits from multi-frame combining and robust channel estimation.
 - Processing steps are informed by MATLAB/Simulink LTE workflows, but every routine here is an independent Python implementation.

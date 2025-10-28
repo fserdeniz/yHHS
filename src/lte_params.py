@@ -400,42 +400,73 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
     # Attempt PBCH/MIB (best-effort, with brute-force fallback)
     try:
         from .pbch import extract_pbch_re, estimate_common_phase, apply_phase, normalize_amplitude, try_decode_mib_from_pbch, brute_force_mib_from_pbch
-        # Subframe-wide CFO estimate improves PBCH LLRs
         sf_idx = 0  # PBCH resides in subframe 0
         cfo_sf = estimate_cfo_for_subframe(x_aligned, config, sf_idx)
-        # Extract, equalise (phase/amplitude), then attempt direct + brute-force MIB decoding
         pbch_re = extract_pbch_re(x_aligned, config, sf_idx, cfo_sf)
         theta = estimate_common_phase(pbch_re)
-        pbch_eq = apply_phase(pbch_re, theta)
-        pbch_eq = normalize_amplitude(pbch_eq)
-        mib = None
+        pbch_eq = normalize_amplitude(apply_phase(pbch_re, theta))
+
+        mib_result: Optional[Dict[str, object]] = None
         if results['NCellID'] is not None:
-            mib = try_decode_mib_from_pbch(pbch_eq, int(results['NCellID']))
-        if not mib:
-            # Brute-force NCellID if direct attempt failed; restrict by NID2 from PSS if available
-            mib = brute_force_mib_from_pbch(pbch_eq, results.get('NCellID'), results.get('NID2'))
-        # Fill if available
-        if mib:
-            if mib.get('NCellID') is not None:
-                results['NCellID'] = int(mib['NCellID'])
-            results['CellRefP'] = mib.get('CellRefP')
-            results['PHICHDuration'] = mib.get('PHICHDuration')
-            results['Ng'] = mib.get('Ng')
-            results['NFrame'] = mib.get('NFrame')
-            if mib.get('NDLRB_from_MIB') is not None:
-                results['NDLRB'] = mib['NDLRB_from_MIB']
-            results['Note'] = 'PBCH/MIB decoded (best-effort with brute-force)'
+            candidate = try_decode_mib_from_pbch(pbch_eq, int(results['NCellID']))
+            if candidate and candidate.get('BitErrors', 99) <= 2:
+                mib_result = candidate
+        if mib_result is None:
+            candidate = brute_force_mib_from_pbch(pbch_eq, results.get('NCellID'), results.get('NID2'))
+            if candidate and candidate.get('BitErrors', 99) <= 2:
+                mib_result = candidate
+
+        if mib_result:
+            results['MIB'] = dict(mib_result)
+            results['MIB_BitErrors'] = mib_result.get('BitErrors')
+            results['MIB_RateMatchRV'] = mib_result.get('RateMatchRV')
+            results['MIB_LLRStart'] = mib_result.get('LLRStart')
+            if mib_result.get('PayloadBits') is not None:
+                payload_bits = ''.join(str(int(b)) for b in mib_result['PayloadBits'])
+                results['MIB_PayloadBits'] = payload_bits
+            if mib_result.get('NDLRB_from_MIB') is not None:
+                results['NDLRB_from_MIB'] = mib_result['NDLRB_from_MIB']
+            if mib_result.get('BitErrors', 99) == 0:
+                decoded_id = mib_result.get('DecodedNCellID')
+                if decoded_id is None or decoded_id == results.get('NCellID'):
+                    results['CellRefP'] = mib_result.get('CellRefP')
+                    results['PHICHDuration'] = mib_result.get('PHICHDuration')
+                    results['Ng'] = mib_result.get('Ng')
+                    results['NFrame'] = mib_result.get('NFrame')
+                    if mib_result.get('NDLRB_from_MIB') is not None:
+                        results['NDLRB'] = mib_result['NDLRB_from_MIB']
+                    results['Note'] = 'PBCH/MIB decoded successfully (BitErrors=0).'
+                elif 'Note' not in results or not results['Note']:
+                    results['Note'] = (
+                        f"PBCH/MIB decoded (BitErrors=0) for NCellID={decoded_id}, "
+                        f"which differs from sync PCI {results.get('NCellID')}"
+                    )
+            else:
+                # Keep previously derived broadcast parameters but expose the candidate MIB for inspection
+                results.setdefault('CellRefP', None)
+                results.setdefault('PHICHDuration', None)
+                results.setdefault('Ng', None)
+                results.setdefault('NFrame', None)
+                if 'Note' not in results or not results['Note']:
+                    results['Note'] = f"MIB candidate detected (BitErrors={mib_result.get('BitErrors')}); further equalisation recommended."
         else:
-            results['CellRefP'] = None
-            results['PHICHDuration'] = None
-            results['Ng'] = None
-            results['NFrame'] = None
-            results['Note'] = 'MIB fields require full PBCH decoding (skeleton in place).'
+            results['MIB'] = None
+            results['MIB_BitErrors'] = None
+            results['MIB_RateMatchRV'] = None
+            results['MIB_LLRStart'] = None
+            results['MIB_PayloadBits'] = None
+            if 'Note' not in results or not results['Note']:
+                results['Note'] = 'MIB fields require stronger PBCH decoding (candidate not found).'
     except Exception as e:
         results['CellRefP'] = None
         results['PHICHDuration'] = None
         results['Ng'] = None
         results['NFrame'] = None
+        results['MIB'] = None
+        results['MIB_BitErrors'] = None
+        results['MIB_RateMatchRV'] = None
+        results['MIB_LLRStart'] = None
+        results['MIB_PayloadBits'] = None
         results['Note'] = f'PBCH path error: {e}'
 
     return results
@@ -559,6 +590,7 @@ def pretty_print_results(res: Dict[str, object]) -> str:
     lines = []
     for k in [
         'NDLRB',
+        'NDLRB_from_MIB',
         'DuplexMode',
         'CyclicPrefix',
         'NCellID',
@@ -569,6 +601,7 @@ def pretty_print_results(res: Dict[str, object]) -> str:
         'Estimated_CFO_rad_per_sample',
         'PSS_metric',
         'SSS_metric',
+        'MIB_BitErrors',
         'CellRefP',
         'PHICHDuration',
         'Ng',

@@ -87,6 +87,40 @@ def normalize_amplitude(pbch_re: np.ndarray) -> np.ndarray:
     return y
 
 
+def decision_directed_equalize(
+    pbch_re: np.ndarray,
+    ncellid: int,
+    cellrefp: int,
+    mask: Optional[np.ndarray] = None,
+    iterations: int = 2,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Estimate a simple per-subcarrier channel using decision-directed averaging.
+
+    Returns (equalised_pbch, channel_estimate_per_subcarrier).
+    """
+    eq = pbch_re.astype(np.complex64, copy=True)
+    n_sym, n_sc = eq.shape
+    if mask is None:
+        mask = np.ones((n_sym, n_sc), dtype=bool)
+    channel = np.ones(n_sc, dtype=np.complex64)
+    for _ in range(max(iterations, 1)):
+        for k in range(n_sc):
+            idx = np.where(mask[:, k])[0]
+            if idx.size == 0:
+                channel[k] = 1.0 + 0.0j
+                continue
+            obs = pbch_re[idx, k]
+            decis = np.sign(eq[idx, k].real) + 1j * np.sign(eq[idx, k].imag)
+            denom = decis + 1e-6
+            h = np.mean(obs / denom)
+            if not np.isfinite(h):
+                h = 1.0 + 0.0j
+            channel[k] = h
+        eq = pbch_re / channel[None, :]
+    eq = normalize_amplitude(eq)
+    return eq, channel
+
+
 def qpsk_llrs(pbch_eq: np.ndarray, noise_var: float = 1.0) -> np.ndarray:
     """Compute simple LLRs for QPSK symbols assuming unit-energy constellation.
     Returns LLRs array of shape (num_bits,), mapping Gray-coded QPSK.
@@ -409,10 +443,16 @@ def try_decode_mib_from_pbch(pbch_re: np.ndarray, ncellid: int) -> Optional[Dict
       - De-rate match and Viterbi-decode (36.212 5.3.1.1, K=7) to 40 bits (24 MIB + 16 CRC)
       - Verify CRC (scrambled with NCellID) and extract fields: NDLRB, PHICHDuration, Ng, SFN, CellRefP
     """
+    best_candidate: Optional[Dict[str, object]] = None
+    best_errors = 999
     for cellrefp_h in (1, 2, 4):
         mask = crs_data_mask_for_pbch(ncellid, cellrefp=cellrefp_h)
-        data_re = pbch_re.transpose(1, 0)[mask.transpose(1, 0)].reshape(-1)
-        llrs_all = qpsk_llrs(data_re, noise_var=1.0)
+        eq_re, channel = decision_directed_equalize(pbch_re, ncellid, cellrefp_h, mask=mask, iterations=5)
+        data_re = eq_re.transpose(1, 0)[mask.transpose(1, 0)].reshape(-1)
+        if data_re.size == 0:
+            continue
+        noise_var = float(np.mean((np.abs(data_re) - 1.0) ** 2) + 1e-3)
+        llrs_all = qpsk_llrs(data_re, noise_var=noise_var)
         if llrs_all.size < 480:
             continue
         max_start = llrs_all.size - 480
@@ -430,18 +470,26 @@ def try_decode_mib_from_pbch(pbch_re: np.ndarray, ncellid: int) -> Optional[Dict
                 calc = crc16_ccitt_bits(payload)
                 got = bits_to_uint(crc_bits)
                 mask_val = _PBCH_CRC_MASKS[cellrefp_h]
-                if (got ^ mask_val) != calc:
-                    continue
-                fields = parse_mib_fields(payload, rv)
-                if fields.get('NDLRB_from_MIB') in (6, 15, 25, 50, 75, 100) and fields.get('Ng') in ('1/6', '1/2', '1', '2'):
-                    return {
-                        'CellRefP': cellrefp_h,
-                        'PHICHDuration': fields.get('PHICHDuration'),
-                        'Ng': fields.get('Ng'),
-                        'NFrame': fields.get('NFrame'),
-                        'NDLRB_from_MIB': fields.get('NDLRB_from_MIB'),
-                    }
-    return None
+                bit_errors = bin(calc ^ (got ^ mask_val)).count('1')
+                if bit_errors < best_errors:
+                    fields = parse_mib_fields(payload, rv)
+                    if fields.get('NDLRB_from_MIB') in (6, 15, 25, 50, 75, 100) and fields.get('Ng') in ('1/6', '1/2', '1', '2'):
+                        best_candidate = {
+                            'CellRefP': cellrefp_h,
+                            'PHICHDuration': fields.get('PHICHDuration'),
+                            'Ng': fields.get('Ng'),
+                            'NFrame': fields.get('NFrame'),
+                            'NDLRB_from_MIB': fields.get('NDLRB_from_MIB'),
+                            'RateMatchRV': rv,
+                            'LLRStart': st,
+                            'NoiseVar': noise_var,
+                            'BitErrors': bit_errors,
+                            'PayloadBits': payload.copy(),
+                        }
+                        best_errors = bit_errors
+                        if bit_errors == 0:
+                            return best_candidate
+    return best_candidate
 
 
 def brute_force_mib_from_pbch(pbch_re: np.ndarray, ncellid_hint: Optional[int] = None, nid2_hint: Optional[int] = None) -> Optional[Dict[str, object]]:
@@ -465,8 +513,8 @@ def brute_force_mib_from_pbch(pbch_re: np.ndarray, ncellid_hint: Optional[int] =
     # Reuse the single-id decoder; stop at first plausible hit
     for nid in cand_ids:
         mib = try_decode_mib_from_pbch(pbch_re, nid)
-        if mib and mib.get('NDLRB_from_MIB') in (6, 15, 25, 50, 75, 100):
+        if mib and mib.get('BitErrors', 99) <= 0 and mib.get('NDLRB_from_MIB') in (6, 15, 25, 50, 75, 100):
             mib = dict(mib)
-            mib['NCellID'] = nid
+            mib['DecodedNCellID'] = nid
             return mib
     return None
