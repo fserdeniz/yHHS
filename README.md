@@ -61,7 +61,13 @@ NDLRB: 50
 DuplexMode: FDD
 CyclicPrefix: Normal
 NCellID: 455
+NID1: 151
+NID2: 2
 NSubframe: 0
+FrameOffsetSamples: 11665
+Estimated_CFO_rad_per_sample: -2.26e-05
+PSS_metric: 0.967
+SSS_metric: 0.994
 CellRefP: None
 PHICHDuration: None
 Ng: None

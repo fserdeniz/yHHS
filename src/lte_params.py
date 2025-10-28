@@ -82,6 +82,7 @@ def generate_pss_td(nfft: int, nid2: int) -> np.ndarray:
 
 
 def _symbol_lengths(config: LTEConfig) -> Tuple[int, ...]:
+    # Normal CP slot: each symbol length is its CP plus NFFT samples
     return tuple(int(config.cp_slot[i] + config.nfft) for i in range(config.symbols_per_slot))
 
 
@@ -171,10 +172,12 @@ def detect_pss_across_slots(x: np.ndarray, config: LTEConfig) -> Dict:
         td = generate_pss_td(config.nfft, nid2)
         ref = np.concatenate([td[-cp_pss:], td])
         ref_energy = float(np.sum(np.abs(ref) ** 2) + 1e-12)
+        # Reverse-conjugate reference to obtain the matched-filter kernel
         mf = np.conjugate(ref[::-1])
         corr = signal.fftconvolve(x, mf, mode='valid')
         power = np.abs(corr) ** 2
         idx = int(np.argmax(power))
+        # Normalise by instantaneous window energy so the metric is SNR-like
         window_energy = float(np.sum(signal_energy[idx:idx + ref.size]) + 1e-12)
         metric = float(power[idx] / (ref_energy * window_energy + 1e-12))
         if metric > best['metric']:
@@ -295,6 +298,7 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
     results['CyclicPrefix'] = 'Normal'
 
     # Detect PSS via matched filter to find PCI group (NID2) and initial timing/CFO
+    # (mirrors MATLAB LTE Toolbox cell search behaviour)
     pss = detect_pss_across_slots(x, config)
     results['PSS_metric'] = pss['metric']
     results['NID2'] = pss['nid2']
@@ -335,6 +339,7 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
     results['Estimated_CFO_rad_per_sample'] = float(cfo)
 
     # Align capture so subframe 0 (containing detected PSS) starts at sample 0
+    # (equivalent to MATLAB's frame timing adjustment after cell search)
     pss_offset = pss_symbol_offset_samples(config)
     frame_offset = (pss_start - pss_offset) % len(x)
     results['FrameOffsetSamples'] = int(frame_offset)
@@ -355,6 +360,7 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
     slot_local = slot % config.slots_per_subframe
     local_last = ((slot_local + 1) * config.symbols_per_slot) - 1
     sss_local = max(local_last - 1, 0)
+    # Evaluate the FFT of the SSS symbol using the CFO estimated from PSS
     F_sss = fft_symbol(x_aligned, int(sym_starts[sss_local]), int(cp_vec[sss_local]), config.nfft, pss['cfo'])
     nid1, m_sss, is_subframe0, is_fdd = sss_detect_in_symbol(F_sss, config.nfft, int(pss['nid2']))
     results['SSS_metric'] = m_sss
@@ -377,12 +383,14 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
     # If TDD, try to detect special subframe at subframe 1 (heuristic)
     if (nid1 is not None) and (not is_fdd):
         try:
+            # Use centre-band energy ratios to flag DwPTS style subframe patterns
             tdd_info = detect_tdd_special_subframe(x_aligned, config)
             results.update(tdd_info)
         except Exception:
             results['TDD_SpecialSubframe1'] = None
             results['TDD_SpecialSubframe1_Ratio'] = None
         try:
+            # Coarse UL/DL pattern classification for configuration index 0/1/2
             cfg_info = detect_tdd_config(x_aligned, config)
             results.update(cfg_info)
         except Exception:
@@ -395,6 +403,7 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
         # Subframe-wide CFO estimate improves PBCH LLRs
         sf_idx = 0  # PBCH resides in subframe 0
         cfo_sf = estimate_cfo_for_subframe(x_aligned, config, sf_idx)
+        # Extract, equalise (phase/amplitude), then attempt direct + brute-force MIB decoding
         pbch_re = extract_pbch_re(x_aligned, config, sf_idx, cfo_sf)
         theta = estimate_common_phase(pbch_re)
         pbch_eq = apply_phase(pbch_re, theta)
@@ -548,6 +557,22 @@ def compute_center_energy_matrix(x: np.ndarray, config: LTEConfig, subframes: in
 
 def pretty_print_results(res: Dict[str, object]) -> str:
     lines = []
-    for k in ['NDLRB','DuplexMode','CyclicPrefix','NCellID','NSubframe','CellRefP','PHICHDuration','Ng','NFrame']:
+    for k in [
+        'NDLRB',
+        'DuplexMode',
+        'CyclicPrefix',
+        'NCellID',
+        'NID1',
+        'NID2',
+        'NSubframe',
+        'FrameOffsetSamples',
+        'Estimated_CFO_rad_per_sample',
+        'PSS_metric',
+        'SSS_metric',
+        'CellRefP',
+        'PHICHDuration',
+        'Ng',
+        'NFrame',
+    ]:
         lines.append(f"{k}: {res.get(k)}")
     return "\n".join(lines)
