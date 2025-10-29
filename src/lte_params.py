@@ -435,11 +435,11 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
                 results['NCellID_from_MIB'] = int(decoded_id)
             if mib_result.get('BitErrors', 99) == 0:
                 decoded_id = mib_result.get('DecodedNCellID')
+                results['CellRefP'] = mib_result.get('CellRefP')
+                results['PHICHDuration'] = mib_result.get('PHICHDuration')
+                results['Ng'] = mib_result.get('Ng')
+                results['NFrame'] = mib_result.get('NFrame')
                 if decoded_id is None or decoded_id == results.get('NCellID'):
-                    results['CellRefP'] = mib_result.get('CellRefP')
-                    results['PHICHDuration'] = mib_result.get('PHICHDuration')
-                    results['Ng'] = mib_result.get('Ng')
-                    results['NFrame'] = mib_result.get('NFrame')
                     if mib_result.get('NDLRB_from_MIB') is not None:
                         results['NDLRB'] = mib_result['NDLRB_from_MIB']
                     results['Note'] = 'PBCH/MIB decoded successfully (BitErrors=0).'
