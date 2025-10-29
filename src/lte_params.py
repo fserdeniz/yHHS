@@ -426,6 +426,13 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
                 results['MIB_PayloadBits'] = payload_bits
             if mib_result.get('NDLRB_from_MIB') is not None:
                 results['NDLRB_from_MIB'] = mib_result['NDLRB_from_MIB']
+            results['CellRefP_from_MIB'] = mib_result.get('CellRefP')
+            results['PHICHDuration_from_MIB'] = mib_result.get('PHICHDuration')
+            results['Ng_from_MIB'] = mib_result.get('Ng')
+            results['NFrame_from_MIB'] = mib_result.get('NFrame')
+            decoded_id = mib_result.get('DecodedNCellID')
+            if decoded_id is not None:
+                results['NCellID_from_MIB'] = int(decoded_id)
             if mib_result.get('BitErrors', 99) == 0:
                 decoded_id = mib_result.get('DecodedNCellID')
                 if decoded_id is None or decoded_id == results.get('NCellID'):
@@ -455,6 +462,11 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
             results['MIB_RateMatchRV'] = None
             results['MIB_LLRStart'] = None
             results['MIB_PayloadBits'] = None
+            results['NCellID_from_MIB'] = None
+            results['CellRefP_from_MIB'] = None
+            results['PHICHDuration_from_MIB'] = None
+            results['Ng_from_MIB'] = None
+            results['NFrame_from_MIB'] = None
             if 'Note' not in results or not results['Note']:
                 results['Note'] = 'MIB fields require stronger PBCH decoding (candidate not found).'
     except Exception as e:
@@ -467,6 +479,11 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
         results['MIB_RateMatchRV'] = None
         results['MIB_LLRStart'] = None
         results['MIB_PayloadBits'] = None
+        results['NCellID_from_MIB'] = None
+        results['CellRefP_from_MIB'] = None
+        results['PHICHDuration_from_MIB'] = None
+        results['Ng_from_MIB'] = None
+        results['NFrame_from_MIB'] = None
         results['Note'] = f'PBCH path error: {e}'
 
     return results
@@ -588,12 +605,23 @@ def compute_center_energy_matrix(x: np.ndarray, config: LTEConfig, subframes: in
 
 def pretty_print_results(res: Dict[str, object]) -> str:
     lines = []
+    def fmt_value(key: str, val: object) -> str:
+        if val is None:
+            return 'Unknown'
+        if isinstance(val, float):
+            if key in ('Estimated_CFO_rad_per_sample',):
+                return f"{val:.6f}"
+            if key in ('PSS_metric', 'SSS_metric'):
+                return f"{val:.3f}"
+        return str(val)
+
     for k in [
         'NDLRB',
         'NDLRB_from_MIB',
         'DuplexMode',
         'CyclicPrefix',
         'NCellID',
+        'NCellID_from_MIB',
         'NID1',
         'NID2',
         'NSubframe',
@@ -602,10 +630,16 @@ def pretty_print_results(res: Dict[str, object]) -> str:
         'PSS_metric',
         'SSS_metric',
         'MIB_BitErrors',
+        'MIB_RateMatchRV',
+        'MIB_LLRStart',
         'CellRefP',
+        'CellRefP_from_MIB',
         'PHICHDuration',
+        'PHICHDuration_from_MIB',
         'Ng',
+        'Ng_from_MIB',
         'NFrame',
+        'NFrame_from_MIB',
     ]:
-        lines.append(f"{k}: {res.get(k)}")
+        lines.append(f"{k}: {fmt_value(k, res.get(k))}")
     return "\n".join(lines)
