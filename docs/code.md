@@ -48,8 +48,9 @@ These values drive symbol timing, FFT sizing, and indexing used throughout the c
   - `sss_detect_in_symbol(fft_sym, nfft, nid2)`: Brute‑force over nid1∈[0..167], subframe∈{0,5}, duplex∈{FDD,TDD} (and TDD variants) to find the maximum correlation; returns `(nid1, metric, is_subframe0, is_fdd)`.
 
 ## PBCH Extraction and Equalization (`src/pbch.py`)
-- `extract_pbch_re(x, cfg, subframe_idx, cfo)`: Returns complex REs of shape `(4, 72)` for PBCH (slot 1, symbols 0..3, center 6 RB) using the given subframe‑wide CFO.
-- `crs_data_mask_for_pbch(ncellid, cellrefp=1)`: Boolean mask `(4,72)` marking data REs vs. CRS (port 0 mandatory, port 1 optional); removes CRS on the first PBCH symbol (Normal CP case).
+- `extract_pbch_re(x, cfg, subframe_idx, cfo)`: Returns complex REs of shape `(4, 72)` for PBCH (slot 1, symbols 0..3, center 6 RB) using the given subframe-wide CFO.
+- `crs_data_mask_for_pbch(ncellid, cellrefp=1)`: Boolean mask `(4,72)` that blanks only the CRS REs actually present for the requested `CellRefP` (ports 0/1 on symbol 0, ports 2/3 on symbol 1 for Normal CP PBCH).
+- `pbch_equalize_with_crs(pbch_re, ncellid, ndlrb, cellrefp=2)`: Builds the spec CRS sequences, samples their pilot REs inside the PBCH grid, interpolates a per-subcarrier channel, and returns MATLAB-like equalised PBCH symbols alongside the estimated CFR.
 - Phase/amplitude equalization:
   - `estimate_common_phase(pbch_re)`: Averages unit vectors to estimate common phase (returns angle to apply).
   - `apply_phase(pbch_re, theta)` and `normalize_amplitude(pbch_re)`: Lightweight EQ.
@@ -76,10 +77,10 @@ These values drive symbol timing, FFT sizing, and indexing used throughout the c
   - Iterates candidate `NCellID` values (restricted to `3*nid1 + nid2_hint` when available); calls the above method; stops at first plausible MIB.
 
 ## High‑Level Driver
-- `analyze_lte_iq(x, config=LTEConfig())` (`src/lte_params.py`):
+- `analyze_lte_iq(x, config=LTEConfig(), enable_bruteforce=True)` (`src/lte_params.py`):
   - Sets `NDLRB` and `CyclicPrefix` based on config
   - Runs PSS/SSS to populate `NID2`, `NID1`, `NCellID`, `DuplexMode`, `NSubframe`
-  - Runs PBCH: CFO (subframe‑wide), PBCH RE extraction, phase EQ, normalization
+  - Runs PBCH: CFO (subframe-wide), PBCH RE extraction, phase EQ, normalization. Set `enable_bruteforce=False` to mimic MATLAB LTE Toolbox behaviour (only decode the measured PCI without the expensive brute-force search).
   - Tries MIB via `try_decode_mib_from_pbch`; if needed runs `brute_force_mib_from_pbch`
   - Returns a dictionary with all available fields; includes TDD heuristics (`TDD_SpecialSubframe1`, `TDD_ConfigIndex`) when TDD
 

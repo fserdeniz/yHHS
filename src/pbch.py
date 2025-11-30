@@ -40,25 +40,127 @@ def extract_pbch_re(x: np.ndarray, cfg: LTEConfig, subframe_idx: int, cfo: float
 def crs_data_mask_for_pbch(ncellid: int, cellrefp: int = 1) -> np.ndarray:
     """Return boolean mask of shape (4,72) for PBCH REs, masking CRS REs.
 
-    Normal CP, PBCH occupies slot 1, symbols l=0..3. Cell-specific RS (CRS)
-    for LTE appear on l=0 and l=4 within each slot for port 0; only l=0 overlaps PBCH.
-
-    - For port 0: (k + v_shift) mod 6 == 0 at l = 0
-    - For port 1 (when cellrefp >= 2): (k + v_shift + 3) mod 6 == 0 at l = 0
-    - For ports 2/3 (when cellrefp == 4), CRS are on other symbols which do not
-      overlap PBCH symbols 0..3 for Normal CP. We conservatively remove only l=0
-      patterns for ports 0 and 1.
+    The mask follows TS 36.211 Table 6.10.1.2-1 for Normal CP and respects the
+    requested number of CRS ports (CellRefP). Only the REs carrying CRS pilots
+    are blanked out so that PBCH data REs remain available for demodulation.
     """
-    v_shift = ncellid % 6
+    v_shift = int(ncellid) % 6
     mask = np.ones((4, 72), dtype=bool)
     idxs = np.arange(72)
-    crs0 = (idxs % 6) == (v_shift % 6)
-    crs1 = (idxs % 6) == ((v_shift + 3) % 6)
-    mask[0, crs0] = False  # port 0
-    mask[0, crs1] = False  # port 1 (reserved even if unused)
-    mask[1, crs0] = False  # port 2
-    mask[1, crs1] = False  # port 3
+    crs_port0 = (idxs % 6) == v_shift
+    crs_port1 = (idxs % 6) == ((v_shift + 3) % 6)
+    mask[0, crs_port0] = False  # port 0 always present
+    if cellrefp >= 2:
+        mask[0, crs_port1] = False  # port 1 present when CellRefP >= 2
+    if cellrefp >= 4:
+        # Ports 2/3 use l=1 inside slot 1 for Normal CP.
+        mask[1, crs_port0] = False
+        mask[1, crs_port1] = False
     return mask
+
+
+_CRS_PORT_CFG = {
+    0: {"symbols": (0, 4), "delta": 0},
+    1: {"symbols": (0, 4), "delta": 3},
+    2: {"symbols": (1, 5), "delta": 0},
+    3: {"symbols": (1, 5), "delta": 3},
+}
+
+
+def _crs_qpsk_sequence(ncellid: int, ndlrb: int, slot_index: int, symbol_l: int, port: int) -> np.ndarray:
+    """Generate the CRS QPSK sequence r(m) for a given slot/symbol/port."""
+    length = max(2 * int(ndlrb), 12)
+    c_init = (
+        (1 << 10) * (7 * (int(slot_index) + 1) + int(symbol_l) + 1) * (2 * int(ncellid) + 1)
+        + 2 * int(ncellid)
+        + int(port)
+    ) & 0x7FFFFFFF
+    seq = _gold_seq(int(c_init), 2 * length)
+    i_bits = seq[0::2].astype(np.float64)
+    q_bits = seq[1::2].astype(np.float64)
+    re = 1.0 - 2.0 * i_bits
+    im = 1.0 - 2.0 * q_bits
+    return (re + 1j * im) / np.sqrt(2.0)
+
+
+def _pbch_absolute_subcarriers(ndlrb: int, width: int = 72) -> np.ndarray:
+    ndlrb = max(int(ndlrb), 6)
+    start_rb = max(ndlrb // 2 - 3, 0)
+    start_subcarrier = start_rb * 12
+    return start_subcarrier + np.arange(width)
+
+
+def _interpolate_complex_line(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.complex128)
+    finite = np.isfinite(arr.real) & np.isfinite(arr.imag)
+    idx = np.where(finite)[0]
+    if idx.size == 0:
+        return np.ones_like(arr, dtype=np.complex128)
+    if idx.size == 1:
+        return np.full_like(arr, arr[idx[0]], dtype=np.complex128)
+    n = np.arange(arr.size)
+    re = np.interp(n, idx, arr[idx].real)
+    im = np.interp(n, idx, arr[idx].imag)
+    return re + 1j * im
+
+
+def pbch_equalize_with_crs(
+    pbch_re: np.ndarray,
+    ncellid: int,
+    ndlrb: int,
+    cellrefp: int = 2,
+    slot_index: int = 1,
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
+    """Equalize PBCH REs using CRS pilots (MATLAB LTE Toolbox style).
+
+    Returns the equalised PBCH grid, the interpolated per-subcarrier channel,
+    and a detail dictionary with pilot masks/channel samples for diagnostics.
+    """
+    pbch = np.asarray(pbch_re, dtype=np.complex128)
+    if pbch.ndim != 2:
+        raise ValueError("pbch_re must be a 2-D array (symbols x subcarriers)")
+    n_symbols, n_sc = pbch.shape
+    abs_subcarriers = _pbch_absolute_subcarriers(ndlrb, n_sc)
+    pilot_mask = np.zeros_like(pbch, dtype=bool)
+    channel_samples = np.full_like(pbch, np.nan + 1j * np.nan)
+    v_shift = int(ncellid) % 6
+    max_port = {1: 1, 2: 2, 4: 4}.get(int(cellrefp), 2)
+    crs_cache: Dict[Tuple[int, int], np.ndarray] = {}
+    for sym in range(n_symbols):
+        l = sym
+        for port in range(max_port):
+            cfg = _CRS_PORT_CFG.get(port)
+            if cfg is None or l not in cfg["symbols"]:
+                continue
+            key = (l, port)
+            if key not in crs_cache:
+                crs_cache[key] = _crs_qpsk_sequence(ncellid, ndlrb, slot_index, l, port)
+            shift = (v_shift + cfg["delta"]) % 6
+            freq_mask = (abs_subcarriers % 6) == shift
+            if not np.any(freq_mask):
+                continue
+            m = ((abs_subcarriers[freq_mask] - shift) // 6).astype(int)
+            ref_vals = crs_cache[key][m]
+            rx_vals = pbch[sym, freq_mask]
+            channel = rx_vals / (ref_vals + 1e-12)
+            channel_samples[sym, freq_mask] = channel
+            pilot_mask[sym, freq_mask] = True
+    finite_samples = np.isfinite(channel_samples.real) & np.isfinite(channel_samples.imag)
+    counts = finite_samples.sum(axis=0)
+    summed = np.nansum(channel_samples, axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        channel_line = summed / counts
+    channel_line[counts == 0] = np.nan
+    channel_line = _interpolate_complex_line(channel_line)
+    channel_line[np.abs(channel_line) < 1e-6] = 1.0 + 0j
+    pbch_eq = pbch / channel_line[None, :]
+    pbch_eq = normalize_amplitude(pbch_eq)
+    details = {
+        "pilot_mask": pilot_mask,
+        "channel_samples": channel_samples,
+        "subcarrier_indices": abs_subcarriers,
+    }
+    return pbch_eq, channel_line, details
 
 
 def estimate_common_phase(pbch_re: np.ndarray) -> float:

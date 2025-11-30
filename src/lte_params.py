@@ -286,8 +286,19 @@ def sss_detect_in_symbol(fft_sym: np.ndarray, nfft: int, nid2: int) -> Tuple[Opt
     return best
 
 
-def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, object]:
-    """High-level analysis to estimate LTE broadcast parameters from 5 ms capture."""
+def analyze_lte_iq(
+    x: np.ndarray,
+    config: LTEConfig = LTEConfig(),
+    enable_bruteforce: bool = True,
+) -> Dict[str, object]:
+    """High-level analysis to estimate LTE broadcast parameters from 5 ms capture.
+
+    Parameters
+    ----------
+    enable_bruteforce:
+        When False, PBCH decoding follows the MATLAB LTE Toolbox style by only
+        attempting the PCI inferred from the synchronisation stage (skipping the
+        expensive cell-ID brute force fallback)."""
     results: Dict[str, object] = {}
 
     # Derive NDLRB directly from sampling rate and LTE numerology
@@ -411,7 +422,7 @@ def analyze_lte_iq(x: np.ndarray, config: LTEConfig = LTEConfig()) -> Dict[str, 
             candidate = try_decode_mib_from_pbch(pbch_eq, int(results['NCellID']))
             if candidate and candidate.get('BitErrors', 99) <= 2:
                 mib_result = candidate
-        if mib_result is None:
+        if mib_result is None and enable_bruteforce:
             candidate = brute_force_mib_from_pbch(pbch_eq, results.get('NCellID'), results.get('NID2'))
             if candidate and candidate.get('BitErrors', 99) <= 2:
                 mib_result = candidate
