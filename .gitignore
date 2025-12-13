@@ -18,10 +18,11 @@ env/
 .DS_Store
 .idea/
 .vscode/
+.cache/
 
 # Large/binary capture data (do not commit)
 *.raw
 *.iq
 *.bin
+*.mat
 LTEIQ.raw
-

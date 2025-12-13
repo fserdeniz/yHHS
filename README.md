@@ -21,7 +21,12 @@ Analyzes a 5 ms LTE IQ capture and extracts broadcast parameters with a robust, 
 
 ## Data
 - Place your LTE IQ file at the repo root as `LTEIQ.raw` (or adjust the notebook path).
-- Do not commit large/binary captures to Git — `.gitignore` excludes `*.raw`, `*.iq`, `*.bin`, and `LTEIQ.raw`.
+- If your capture is a MATLAB `.mat`, convert it to interleaved float32 `.raw` with:
+  ```
+  python scripts/mat_to_raw.py input.mat -o LTEIQ.raw --key IQ_variable_name
+  ```
+  Works with MATLAB v7.3 (HDF5) files; `--key` is optional (auto-picks the first IQ-like array).
+- Do not commit large/binary captures to Git — `.gitignore` excludes `*.raw`, `*.iq`, `*.bin`, `*.mat`, and `LTEIQ.raw`.
 
 ## Environment
 - Python 3.10+
