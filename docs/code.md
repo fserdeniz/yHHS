@@ -44,8 +44,8 @@ These values drive symbol timing, FFT sizing, and indexing used throughout the c
 - PSS/SSS:
   - `generate_pss_fd(nfft, nid2)`: Frequency‑domain PSS mapped to center 62 bins.
   - `pss_detect_in_symbol(fft_sym, nfft)`: Correlates the 62 center bins vs. all NID2∈{0,1,2} and returns the best.
-  - `generate_sss_fd(nfft, nid1, nid2, is_subframe0, fdd, tdd_variant=0)`: Deterministic SSS generator (FDD and two TDD variants), mapped to the center 62 bins.
-  - `sss_detect_in_symbol(fft_sym, nfft, nid2)`: Brute‑force over nid1∈[0..167], subframe∈{0,5}, duplex∈{FDD,TDD} (and TDD variants) to find the maximum correlation; returns `(nid1, metric, is_subframe0, is_fdd)`.
+  - `generate_sss_fd(nfft, nid1, nid2, is_subframe0, fdd)`: Deterministic SSS generator (FDD/TDD mapping), mapped to the center 62 bins.
+  - `sss_detect_in_symbol(fft_sym, nfft, nid2)`: Brute‑force over nid1∈[0..167], subframe∈{0,5}, duplex∈{FDD,TDD} to find the maximum correlation; returns `(nid1, metric, is_subframe0, is_fdd)`.
 
 ## PBCH Extraction and Equalization (`src/pbch.py`)
 - `extract_pbch_re(x, cfg, subframe_idx, cfo)`: Returns complex REs of shape `(4, 72)` for PBCH (slot 1, symbols 0..3, center 6 RB) using the given subframe-wide CFO.
@@ -59,9 +59,8 @@ These values drive symbol timing, FFT sizing, and indexing used throughout the c
 - LLRs: `qpsk_llrs(pbch_eq, noise_var=1.0)` maps QPSK symbols to soft bits.
 - De‑rate matching:
   - `deratematch_pbch_llrs(llrs480, i_mod4)`: Standard‑inspired 480→120 softbit accumulation per redundancy version.
-  - `deratematch_fold(llrs, L=120, offset=0)`: Generic folded accumulation (used when only partial windows are available).
 - Descrambling (LLR‑domain):
-  - `_gold_seq(c_init, length)` and `pbch_scramble_seq_variants(length, ncellid, i_mod4)`: Several c_init heuristics to improve robustness on short captures.
+  - `_gold_seq(c_init, length)` and `pbch_scramble_seq_variants(length, ncellid, i_mod4)`: Includes the spec PBCH scrambler `c_init=(NCellID<<9)|(i_mod4<<5)|0x1FF` plus legacy heuristics for robustness.
   - `descramble_llrs(llrs, ncellid, i_mod4)`: Applies sign `(+/−)` to LLRs using the selected scrambling sequence.
 - Viterbi: `viterbi_decode_rate13_k7(llrs)` (rate 1/3, K=7) recovers 40 bits; split into 24‑bit payload + 16‑bit CRC.
 - CRC/MIB:
@@ -78,15 +77,18 @@ These values drive symbol timing, FFT sizing, and indexing used throughout the c
 
 ## High‑Level Driver
 - `analyze_lte_iq(x, config=LTEConfig(), enable_bruteforce=True)` (`src/lte_params.py`):
+  - If `config` is omitted, the analyzer auto-selects among standard LTE bandwidths (1.4/3/5/10/15/20 MHz, Normal CP) using the best PSS metric; an `fs_hint` (from `.mat` metadata) biases the choice toward the matching sampling rate.
   - Sets `NDLRB` and `CyclicPrefix` based on config
   - Runs PSS/SSS to populate `NID2`, `NID1`, `NCellID`, `DuplexMode`, `NSubframe`
-  - Runs PBCH: CFO (subframe-wide), PBCH RE extraction, phase EQ, normalization. Set `enable_bruteforce=False` to mimic MATLAB LTE Toolbox behaviour (only decode the measured PCI without the expensive brute-force search).
+  - Runs PBCH: CFO (subframe-wide), PBCH RE extraction, phase-only EQ plus optional CRS-based EQ candidates. Set `enable_bruteforce=False` to mimic MATLAB LTE Toolbox behaviour (only decode the measured PCI without the expensive brute-force search).
   - Tries MIB via `try_decode_mib_from_pbch`; if needed runs `brute_force_mib_from_pbch`
   - Returns a dictionary with all available fields; includes TDD heuristics (`TDD_SpecialSubframe1`, `TDD_ConfigIndex`) when TDD
 
 ## CLI and Notebook
 - CLI (`scripts/run_analysis.py`):
-  - Usage: `python scripts/run_analysis.py LTEIQ.raw`
+  - Usage: `python scripts/run_analysis.py input.raw` (also accepts `.iq` or `.mat`; add `--key VAR` for MATLAB variable selection)
+  - Flags: `--no-bruteforce` to skip PBCH PCI search (faster), `--bruteforce-limit N` to cap candidates (0 for unlimited)
+  - `.mat` files with scalar `fs`/`Fs`/`samp_rate`/`sample_rate` provide a sampling-rate hint to the auto bandwidth selector.
   - Prints a concise summary via `pretty_print_results`
 - Notebook (`notebooks/LTE_Analiz.ipynb`):
   - End‑to‑end demo; plots for PSS/SSS correlations, PBCH spectra and scatter, LLR histograms, energy heatmaps, TDD heuristics, etc.
@@ -100,7 +102,7 @@ These values drive symbol timing, FFT sizing, and indexing used throughout the c
 
 ## Extensibility
 - Replace de‑rate matching with spec‑accurate 36.212 interleaving and circular buffer.
-- Add CRS‑based channel estimation and interpolation for PBCH bandwidth.
+- Improve CRS‑based channel estimation/interpolation for PBCH bandwidth.
 - Support multi‑frame soft combining over the four PBCH repetitions (40 ms) for robust MIB.
 - Tighten CRC masking to spec‑accurate treatment and include CellRefP derivation from CRC scrambling.
 

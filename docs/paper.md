@@ -2,7 +2,7 @@
 
 ## Abstract
 
-We present a Python-based pipeline to extract LTE broadcast parameters from a short, 5 ms IQ capture (Fs=15.36 MHz, 10 MHz BW). The system detects PSS/SSS to estimate cell synchronization and identity, and performs a best-effort PBCH/MIB decoding to recover system broadcast parameters. Key contributions include a deterministic SSS generator with FDD/TDD variants, robust PBCH resource extraction with improved CRS masking (ports 0/1), scrambler-variant search, constrained brute-force over NCellID guided by PSS (NID2), and simple equalization via common phase estimation. With a single 5 ms capture, the pipeline typically recovers NDLRB, DuplexMode, CyclicPrefix, NCellID, NSubframe, and often MIB fields (CellRefP, PHICHDuration, Ng, NFrame), subject to SNR and alignment. The implementation emphasizes clarity and reproducibility suitable for educational demonstration and lab analysis.
+We present a Python-based pipeline to extract LTE broadcast parameters from a short, 5 ms IQ capture (Fs=15.36 MHz, 10 MHz BW). The system detects PSS/SSS to estimate cell synchronization and identity, and performs a best-effort PBCH/MIB decoding to recover system broadcast parameters. Key contributions include a deterministic SSS generator with FDD/TDD variants, robust PBCH resource extraction with improved CRS masking (ports 0/1), a spec PBCH scrambler (`c_init=(NCellID<<9)|(i_mod4<<5)|0x1FF`) with guarded variants, constrained brute-force over NCellID guided by PSS (NID2), and simple equalization via common phase estimation plus optional CRS-based PBCH equalization. With a single 5 ms capture, the pipeline typically recovers NDLRB, DuplexMode, CyclicPrefix, NCellID, NSubframe, and often MIB fields (CellRefP, PHICHDuration, Ng, NFrame), subject to SNR and alignment. The implementation emphasizes clarity and reproducibility suitable for educational demonstration and lab analysis.
 
 ## Introduction
 
@@ -24,7 +24,7 @@ Scope
 ## Methods
 
 Signal Model and Assumptions
-- Downlink LTE, 10 MHz BW, sampling rate 15.36 MHz, FFT size 1024, Normal CP (7 symbols/slot).
+- Downlink LTE, standard bandwidth set {1.4, 3, 5, 10, 15, 20} MHz (NDLRB ∈ {6,15,25,50,75,100}); the analyzer auto-selects the best-fitting bandwidth via PSS correlation. Sampling rates/NFFT follow LTE numerology (e.g., 30.72 Msps/2048 for 20 MHz). Normal CP (7 symbols/slot).
 - Single 5 ms capture (5 subframes), unknown CFO and phase.
 
 Acquisition and Synchronization
@@ -82,13 +82,13 @@ Strengths
 - PBCH decoding includes practical steps (CRS masking, descrambler variants, quality gates) that increase success rate without overcomplexity.
 
 Limitations
-- Simplified equalization (common phase + per-symbol normalization) may be insufficient for highly frequency-selective channels.
+- Lightweight equalization (phase-only plus an optional CRS-based candidate) may still be insufficient for highly frequency-selective channels.
 - CRC mask family is heuristic; full spec-accurate PBCH CRC treatment can further reduce false positives.
 - Single-transmission view; combining across 4 PBCH repetitions (40 ms) would improve reliability.
 
 Future Work
 - Integrate CRS-based channel estimation and interpolation over PBCH bandwidth.
-- Full 36.212 rate-matching/interleaver implementation and spec-exact PBCH scrambling.
+- Full 36.212 rate-matching/interleaver implementation and tighter PBCH CRC/scrambler handling beyond the current c_init coverage.
 - Soft-combining across multiple captures; blind NCellID search with stronger priors.
 
 ## Conclusion
@@ -103,12 +103,12 @@ Code and Environment
 - Recommended venv: `yHHS_env`
 
 Steps
-- Place `LTEIQ.raw` at repo root.
+- Place IQ at repo root (`LTEIQ.raw`/`.iq` interleaved float32 or `.mat`; use `--key` to pick a MATLAB variable when needed). If your `.mat` contains a scalar `fs`/`Fs`/`samp_rate`/`sample_rate`, it will be used as a sampling-rate hint for auto-configuration.
 - Create venv and install dependencies:
   - `python3 -m venv yHHS_env`
   - `source yHHS_env/bin/activate`
   - `pip install -r requirements.txt`
-- Run CLI: `python scripts/run_analysis.py LTEIQ.raw`
+ - Run CLI: `python scripts/run_analysis.py LTEIQ.raw` (add `--no-bruteforce` for speed or `--bruteforce-limit N` to cap PBCH search; `.mat` supported with `--key VAR`)
 - Or open the notebook: `notebooks/LTE_Analiz.ipynb`
 
 Determinism

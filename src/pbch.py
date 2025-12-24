@@ -427,7 +427,7 @@ def crc16_ccitt_bits(bits: np.ndarray, init: int = 0xFFFF) -> int:
 
 
 def pbch_descrambler(bits: np.ndarray, ncellid: int, i_mod4: int = 0) -> np.ndarray:
-    seq = pbch_scrambling_sequence(ncellid, bits.size)
+    seq = pbch_scrambling_sequence(ncellid, bits.size, i_mod4=i_mod4)
     return bits ^ seq
 
 
@@ -449,33 +449,36 @@ def _gold_seq(c_init: int, length: int) -> np.ndarray:
     return (x1[1600:1600 + length] ^ x2[1600:1600 + length]).astype(np.uint8)
 
 
-def pbch_scrambling_sequence(ncellid: int, length: int, offset: int = 0) -> np.ndarray:
-    seq = _gold_seq(ncellid, length + offset)
+def pbch_scrambling_sequence(ncellid: int, length: int, i_mod4: int = 0, offset: int = 0) -> np.ndarray:
+    """PBCH Gold sequence (36.211 §6.6.1) with standard c_init and 1600 offset inside _gold_seq."""
+    c_init = ((int(ncellid) & 0x3FF) << 9) | ((int(i_mod4) & 0x3) << 5) | 0x1FF
+    seq = _gold_seq(c_init, length + offset)
     return seq[offset:offset + length]
 
 
 def pbch_scramble_seq(length: int, ncellid: int, i_mod4: int) -> np.ndarray:
-    return pbch_scrambling_sequence(ncellid, length)
+    return pbch_scrambling_sequence(ncellid, length, i_mod4=i_mod4)
 
 
 def descramble_llrs(llrs: np.ndarray, ncellid: int, i_mod4: int) -> np.ndarray:
-    seq = pbch_scrambling_sequence(ncellid, llrs.size)
+    seq = pbch_scrambling_sequence(ncellid, llrs.size, i_mod4=i_mod4)
     signs = 1.0 - 2.0 * seq.astype(float)
     return llrs * signs
 
 
 def pbch_scramble_seq_variants(length: int, ncellid: int, i_mod4: int) -> Tuple[np.ndarray, ...]:
-    """Produce multiple plausible PBCH scrambling sequences for robustness."""
+    """Produce multiple PBCH scrambling sequences (spec + legacy heuristics) for robustness."""
+    variants = [pbch_scrambling_sequence(ncellid, length, i_mod4=i_mod4)]
     c_inits = [
-        ((ncellid & 0x3FF) << 9) | ((i_mod4 & 0x3) << 4) | 0x1FF,
         ((ncellid & 0x3FF) << 10) | ((i_mod4 & 0x3) << 5) | 0x155,
         ((ncellid & 0x3FF) << 7) | ((i_mod4 & 0x3) << 2) | 0x035,
         ((ncellid & 0x3FF) ^ ((i_mod4 & 0x3) << 9) ^ 0x3E1) & 0x7FFFFFFF,
     ]
-    outs = []
     for ci in c_inits:
-        outs.append(_gold_seq(ci, length))
-    return tuple(outs)
+        seq = _gold_seq(ci, length)
+        if not any(np.array_equal(seq, v) for v in variants):
+            variants.append(seq)
+    return tuple(variants)
 
 
 def deratematch_pbch_llrs(llrs480: np.ndarray, i_mod4: int) -> Optional[np.ndarray]:
@@ -594,7 +597,12 @@ def try_decode_mib_from_pbch(pbch_re: np.ndarray, ncellid: int) -> Optional[Dict
     return best_candidate
 
 
-def brute_force_mib_from_pbch(pbch_re: np.ndarray, ncellid_hint: Optional[int] = None, nid2_hint: Optional[int] = None) -> Optional[Dict[str, object]]:
+def brute_force_mib_from_pbch(
+    pbch_re: np.ndarray,
+    ncellid_hint: Optional[int] = None,
+    nid2_hint: Optional[int] = None,
+    max_candidates: Optional[int] = None,
+) -> Optional[Dict[str, object]]:
     """Brute-force PBCH MIB over NCellID to improve robustness with limited data.
 
     Tries a small neighborhood around hint first (if provided), then scans the set.
@@ -612,6 +620,8 @@ def brute_force_mib_from_pbch(pbch_re: np.ndarray, ncellid_hint: Optional[int] =
         near = [((h + d) % 504) for d in range(-5, 6)]
         rest = [c for c in cand_ids if c not in near]
         cand_ids = near + rest
+    if max_candidates is not None and max_candidates > 0:
+        cand_ids = cand_ids[:max_candidates]
     # Reuse the single-id decoder; stop at first plausible hit
     for nid in cand_ids:
         mib = try_decode_mib_from_pbch(pbch_re, nid)

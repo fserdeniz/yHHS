@@ -1,8 +1,8 @@
-# LTE Broadcast Parameter Extraction (10 MHz LTE, 5 ms IQ)
+# LTE Broadcast Parameter Extraction (Auto LTE Bandwidth, 5 ms IQ)
 
-Analyzes a 5 ms LTE IQ capture and extracts broadcast parameters with a robust, single‑file pipeline. Includes a presentation‑ready Jupyter notebook packed with explanatory visuals.
+Analyzes a short LTE IQ capture and extracts broadcast parameters with a robust, single‑file pipeline. Includes a presentation‑ready Jupyter notebook packed with explanatory visuals.
 
-- Input: interleaved float32 I/Q from `LTEIQ.raw` (5 ms, Fs=15.36 MHz, 10 MHz BW)
+- Input: interleaved float32 I/Q (`.raw`/`.iq`) or `.mat`; auto-selects LTE bandwidth (1.4–20 MHz, Normal CP) based on the capture. A sampling-rate hint in `.mat` (`fs`, `Fs`, `samp_rate`, etc.) is used when available.
 - PSS/SSS detection:
   - PSS correlation uses a matched-filter search comparable to standard LTE cell-search implementations, providing robust timing, CFO, and frame-align offsets for all NID2 ∈ {0,1,2}
   - **SSS generation now follows 3GPP TS 36.211 § 6.11.2 exactly** (deterministic x_s/x_c/x_z recursions, q/q′ → m₀/m₁, even/odd mapping)
@@ -12,7 +12,7 @@ Analyzes a 5 ms LTE IQ capture and extracts broadcast parameters with a robust, 
   - Spec Gold descrambler (TS 36.211 § 6.6.1)
   - Sub-block interleaver + circular buffer rate matching (TS 36.212 § 5.1.4.2) and tail-biting Viterbi (rate‑1/3, K=7)
   - Brute-force fallback over `NCellID`, filtered by `NID2`
-  - **Channel equalisation with CRS (TS 36.211 § 6.10.1) is still pending**, so MIB fields are not guaranteed yet
+  - Optional CRS-based PBCH equalisation candidate (TS 36.211 § 6.10.1); still best-effort on short captures, MIB fields are not guaranteed
   - Reports raw MIB payload, rate-matching parameters, and CRC/bit-error counts inspired by MATLAB/Simulink LTE diagnostics; all decoding logic is our own Python implementation
 - TDD extras (heuristic, presentation‑friendly):
   - Special subframe (subframe 1) detector via center-band energy
@@ -20,12 +20,12 @@ Analyzes a 5 ms LTE IQ capture and extracts broadcast parameters with a robust, 
 - Notebook with 10+ figures: PSS/SSS correlations, PBCH spectra/scatter, energy heatmaps, LLR histograms, etc. (`notebooks/LTE_Analiz.ipynb`)
 
 ## Data
-- Place your LTE IQ file at the repo root as `LTEIQ.raw` (or adjust the notebook path).
-- If your capture is a MATLAB `.mat`, convert it to interleaved float32 `.raw` with:
+- You can supply IQ as `.raw`/`.iq` (interleaved float32) or `.mat` (standard or v7.3). Place it at the repo root or give a path on the CLI/notebook.
+- For `.mat`, the loader auto-picks the first IQ-like array; override with `--key` on the CLI. If the file contains a scalar `fs`/`Fs`/`samp_rate`/`sample_rate`, it is used as a sampling-rate hint during auto-configuration.
+- Conversion helper (optional): to generate a `.raw` from `.mat`, run:
   ```
   python scripts/mat_to_raw.py input.mat -o LTEIQ.raw --key IQ_variable_name
   ```
-  Works with MATLAB v7.3 (HDF5) files; `--key` is optional (auto-picks the first IQ-like array).
 - Do not commit large/binary captures to Git — `.gitignore` excludes `*.raw`, `*.iq`, `*.bin`, `*.mat`, and `LTEIQ.raw`.
 
 ## Environment
@@ -48,10 +48,15 @@ python -m ipykernel install --user --name=yHHS_env --display-name "Python (yHHS_
 ```
 
 ## Usage
+- Bandwidth auto-detection: the analyzer tries standard LTE bandwidths (1.4/3/5/10/15/20 MHz, normal CP) and picks the one with the strongest PSS match; you can still force behaviour via the CLI flags below.
 - CLI quick run:
 ```
 source yHHS_env/bin/activate
-python scripts/run_analysis.py LTEIQ.raw
+python scripts/run_analysis.py LTEIQ.raw           # or .iq
+python scripts/run_analysis.py input.mat --key IQ  # MATLAB input with optional variable name
+python scripts/run_analysis.py LTEIQ.raw --no-bruteforce          # skip PBCH search for speed
+python scripts/run_analysis.py LTEIQ.raw --bruteforce-limit 40    # cap candidate NCellID search
+# `.mat` files with `fs`/`Fs`/`samp_rate`/`sample_rate` scalars provide a sampling-rate hint for auto bandwidth selection.
 ```
 
 - Notebook:
@@ -85,7 +90,7 @@ NFrame: 509
 
 - With 5 ms input, the pipeline reliably outputs: `NDLRB`, `CyclicPrefix`, `DuplexMode`, `NCellID`, `NSubframe` (SSS now strictly 3GPP-compliant).
 - The analyzer also reports `FrameOffsetSamples`, the sample index shift required to align the capture so that subframe 0 starts at sample 0.
-- PBCH fields (`CellRefP`, `PHICHDuration`, `Ng`, `NFrame`) require CRS-based channel equalisation; the current code implements the spec descrambler/interleaver/decoder but still needs that equaliser to pass CRC checks on real captures. The emitted MIB diagnostics expose bit-error counts so you can gauge confidence before trusting the numbers.
+- PBCH fields (`CellRefP`, `PHICHDuration`, `Ng`, `NFrame`) now try both a lightweight phase-only EQ and a CRS-based candidate; success still depends on SNR/channel selectivity. MIB diagnostics expose bit-error counts so you can gauge confidence before trusting the numbers.
 - Heuristic parts (TDD special subframe/config index) are intended for presentation/triage; longer captures improve accuracy.
 - Production-grade PBCH decoding additionally benefits from multi-frame combining and robust channel estimation.
 - Processing steps are informed by MATLAB/Simulink LTE workflows, but every routine here is an independent Python implementation.
