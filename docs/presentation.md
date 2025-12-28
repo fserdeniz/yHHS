@@ -63,7 +63,9 @@ flowchart LR
 | Sembol/Slot | 7 | Normal CP için |
 
 **Temel Denklem:** Örnekleme frekansı ($F_s$), FFT boyutu ($N_{FFT}$) ve alt taşıyıcı aralığı ($\Delta f$) arasındaki ilişki:
-$$ F_s = N_{FFT} \cdot \Delta f $$
+$$
+F_s = N_{FFT} \cdot \Delta f
+$$
 
 ---
 
@@ -81,7 +83,9 @@ $$ F_s = N_{FFT} \cdot \Delta f $$
 ![CFO and FFT](./codeflow/images/32_cfo_fft.png)
 
 **Denklem (CFO Tahmini):** CP (uzunluk $N_{CP}$) ve sembol sonu arasındaki faz farkı.
-$$ \hat{\omega} = \frac{1}{N_{FFT}}} \angle \left( \sum_{n=0}^{N_{CP}-1} x[n] \cdot x^*[n+N_{FFT}}] \right) $$
+$$
+\hat{\omega} = \frac{1}{N_{FFT}} \angle \left( \sum_{n=0}^{N_{CP}-1} x[n] \cdot x^*[n+N_{FFT}] \right)
+$$
 
 ---
 
@@ -98,7 +102,9 @@ $$ \hat{\omega} = \frac{1}{N_{FFT}}} \angle \left( \sum_{n=0}^{N_{CP}-1} x[n] \c
 ![PSS Detection](./codeflow/images/20_pss_detection.png)
 
 **Denklem (Normalize Korelasyon):** Alınan sinyal ($y$) ile referans PSS ($s_{PSS}$) arasındaki benzerlik ölçütü. 1'e yakın değerler güçlü eşleşme demektir.
-$$ \text{metric} = \frac{|\langle s_{\text{PSS}}, y \rangle|}{\|s_{\text{PSS}}\| \cdot \|y\|} $$
+$$
+\text{metric} = \frac{|\langle s_{\text{PSS}}, y \rangle|}{\|s_{\text{PSS}}\| \cdot \|y\|}
+$$
 
 ---
 
@@ -143,11 +149,15 @@ $$ \text{metric} = \frac{|\langle s_{\text{PSS}}, y \rangle|}{\|s_{\text{PSS}}\|
 ![QPSK LLRs](./codeflow/images/56_qpsk_llrs.png)
 
 **Denklem 1 (Zero-Forcing Kanal Eşitleme):** 
-$$ \mathbf{Y} = \mathbf{H} \cdot \mathbf{X} + \mathbf{N} \quad \implies \quad \hat{\mathbf{X}} = \frac{\mathbf{Y}}{\hat{\mathbf{H}}} $$
+$$
+\mathbf{Y} = \mathbf{H} \cdot \mathbf{X} + \mathbf{N} \quad \implies \quad \hat{\mathbf{X}} = \frac{\mathbf{Y}}{\hat{\mathbf{H}}}
+$$
 - $\mathbf{Y}$: Alınan Sinyal, $\mathbf{H}$: Kanal Tepkisi, $\mathbf{X}$: Gönderilen Sinyal, $\hat{\mathbf{X}}$: Tahmin Edilen Sinyal
 
 **Denklem 2 (QPSK LLR):** Eşitlenmiş bir QPSK sembolü ($y = y_I + j \cdot y_Q$) için yumuşak bit tahmini.
-$$ \text{LLR}(b_0) \propto \frac{y_I}{\sigma^2_n}, \quad \text{LLR}(b_1) \propto \frac{y_Q}{\sigma^2_n} $$
+$$
+\text{LLR}(b_0) \propto \frac{y_I}{\sigma^2_n}, \quad \text{LLR}(b_1) \propto \frac{y_Q}{\sigma^2_n}
+$$
 - $\sigma^2_n$: Gürültü varyansı. LLR değeri ne kadar büyükse, bitin o değerde olduğuna dair güven o kadar yüksektir.
 
 ---
