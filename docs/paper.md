@@ -5,8 +5,9 @@
 We present a Python-based pipeline to extract LTE broadcast parameters from a short, 5 ms IQ capture (Fs=15.36 MHz, 10 MHz BW). The system detects PSS/SSS to estimate cell synchronization and identity, and performs a best-effort PBCH/MIB decoding to recover system broadcast parameters. Key contributions include a deterministic SSS generator with FDD/TDD variants, robust PBCH resource extraction with improved CRS masking (ports 0/1), a spec PBCH scrambler (`c_init=(NCellID<<9)|(i_mod4<<5)|0x1FF`) with guarded variants, constrained brute-force over NCellID guided by PSS (NID2), and simple equalization via common phase estimation plus optional CRS-based PBCH equalization. With a single 5 ms capture, the pipeline typically recovers NDLRB, DuplexMode, CyclicPrefix, NCellID, NSubframe, and often MIB fields (CellRefP, PHICHDuration, Ng, NFrame), subject to SNR and alignment. The implementation emphasizes clarity and reproducibility suitable for educational demonstration and lab analysis.
 
 ## Introduction
-
 LTE broadcast parameters (e.g., NDLRB, DuplexMode, CyclicPrefix, NCellID, MIB fields) are conveyed by synchronization and broadcast channels: PSS, SSS, and PBCH. Recovering these from short IQ captures helps with spectrum exploration, lab exercises, and reverse engineering. This project targets a 5 ms capture at 15.36 MHz for a 10 MHz LTE downlink and implements a practical, didactic pipeline.
+
+![Project Overview](./codeflow/images/00_overview.drawio.png)
 
 Goals
 - Robustly detect PSS/SSS and infer `NCellID = 3*NID1 + NID2`.
@@ -23,6 +24,8 @@ Scope
 
 ## Methods
 
+The overall process is shown in the figure in the introduction. The main steps are detailed below.
+
 Signal Model and Assumptions
 - Downlink LTE, standard bandwidth set {1.4, 3, 5, 10, 15, 20} MHz (NDLRB ∈ {6,15,25,50,75,100}); the analyzer auto-selects the best-fitting bandwidth via PSS correlation. Sampling rates/NFFT follow LTE numerology (e.g., 30.72 Msps/2048 for 20 MHz). Normal CP (7 symbols/slot).
 - Single 5 ms capture (5 subframes), unknown CFO and phase.
@@ -30,6 +33,12 @@ Signal Model and Assumptions
 Acquisition and Synchronization
 - PSS search across slots: compute FFT of last symbol per slot and correlate 62 central subcarriers with generated PSS for NID2∈{0,1,2} [1].
 - SSS search on the symbol preceding PSS: deterministic SSS generator with FDD and TDD variants, brute-force over NID1∈[0..167], subframe∈{0,5} to maximize normalized correlation [2].
+
+![PSS Detection](./codeflow/images/20_pss_detection.png)
+_PSS Detection Flow_
+
+![SSS Detection](./codeflow/images/30_sss_detection.png)
+_SSS Detection Flow_
 
 Frequency/Phase Correction
 - Coarse CFO via CP correlation per symbol; median across a subframe for robustness.
@@ -46,6 +55,9 @@ De‑rate Matching and Decoding
 - Viterbi (rate-1/3, K=7) on 120 softbits → 40 bits; split into 24-bit payload + 16-bit CRC.
 - CRC checks: several cell-dependent masks; accept candidates that also yield plausible MIB fields.
 
+![PBCH Decode Overview](./codeflow/images/50_pbch_decode.png)
+_PBCH Decoding Flow_
+
 Brute‑Force Strategy
 - If direct `NCellID` fails: iterate `NCellID` over PCI set filtered by measured NID2 to reduce search.
 - Reduce runtime with quality gates: limited scrambler variants, 2–3 windows, early rejection on low |LLR| mean.
@@ -55,7 +67,7 @@ TDD Heuristics
 - UL‑DL configuration guess from subframes 2–4 energy classification (DL/UL/UNK).
 
 Implementation
-- Core: `src/lte_params.py`, `src/pbch.py`. CLI: `scripts/run_analysis.py`. Notebook: `notebooks/LTE_Analiz.ipynb`.
+- Core: `src/lte_params.py`, `src/pbch.py`. CLI: `scripts/run_analysis.py`, `scripts/mat_to_raw.py`. Notebook: `notebooks/LTE_Analiz.ipynb`.
 
 ## Results
 
@@ -104,6 +116,7 @@ Code and Environment
 
 Steps
 - Place IQ at repo root (`LTEIQ.raw`/`.iq` interleaved float32 or `.mat`; use `--key` to pick a MATLAB variable when needed). If your `.mat` contains a scalar `fs`/`Fs`/`samp_rate`/`sample_rate`, it will be used as a sampling-rate hint for auto-configuration.
+- (Optional) Convert `.mat` files to `.raw` format: `python scripts/mat_to_raw.py your_capture.mat`
 - Create venv and install dependencies:
   - `python3 -m venv yHHS_env`
   - `source yHHS_env/bin/activate`
