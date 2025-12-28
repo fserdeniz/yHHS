@@ -60,7 +60,9 @@ flowchart LR
 
 **Temel Denklem:** Örnekleme frekansı (F<sub>s</sub>), FFT boyutu (N<sub>FFT</sub>) ve alt taşıyıcı aralığı (Δf) arasındaki ilişki:
 
-![F_s = N_FFT · Δf](https://render.githubusercontent.com/render/math?math=F_%7Bs%7D%20%3D%20N_%7BFFT%7D%20%5Ccdot%20%5CDelta%20f)
+```math
+F_s = N_{FFT} \cdot \Delta f
+```
 
 ---
 
@@ -79,7 +81,9 @@ flowchart LR
 
 **Denklem (CFO Tahmini):** CP (uzunluk N<sub>CP</sub>) ve sembol sonu arasındaki faz farkı.
 
-![CFO tahmini](https://render.githubusercontent.com/render/math?math=%5Chat%7B%5Comega%7D%20%3D%20%5Cfrac%7B1%7D%7BN_%7BFFT%7D%7D%20%5Cangle%20%5Cleft%28%20%5Csum_%7Bn%3D0%7D%5E%7BN_%7BCP%7D-1%7D%20x%5Bn%5D%20%5Ccdot%20x%5E%7B%2A%7D%5Bn%2BN_%7BFFT%7D%5D%20%5Cright%29)
+```math
+\hat{\omega} = \frac{1}{N_{FFT}} \angle \left( \sum_{n=0}^{N_{CP}-1} x[n] \cdot x^{*}[n+N_{FFT}] \right)
+```
 
 ---
 
@@ -97,7 +101,9 @@ flowchart LR
 
 **Denklem (Normalize Korelasyon):** Alınan sinyal (y) ile referans PSS (s<sub>PSS</sub>) arasındaki benzerlik ölçütü. 1'e yakın değerler güçlü eşleşme demektir.
 
-![Normalize korelasyon](https://render.githubusercontent.com/render/math?math=%5Cmathrm%7Bmetric%7D%20%3D%20%5Cfrac%7B%7C%5Clangle%20s_%7B%5Cmathrm%7BPSS%7D%7D%2C%20y%20%5Crangle%7C%7D%7B%5C%7Cs_%7B%5Cmathrm%7BPSS%7D%7D%5C%7C%20%5Ccdot%20%5C%7Cy%5C%7C%7D)
+```math
+\mathrm{metric} = \frac{|\langle s_{\mathrm{PSS}}, y \rangle|}{\|s_{\mathrm{PSS}}\| \cdot \|y\|}
+```
 
 ---
 
@@ -143,13 +149,17 @@ flowchart LR
 
 **Denklem 1 (Zero-Forcing Kanal Eşitleme):**
 
-![Zero-forcing esitleme](https://render.githubusercontent.com/render/math?math=%5Cmathbf%7BY%7D%20%3D%20%5Cmathbf%7BH%7D%20%5Ccdot%20%5Cmathbf%7BX%7D%20%2B%20%5Cmathbf%7BN%7D%20%5CRightarrow%20%5Chat%7B%5Cmathbf%7BX%7D%7D%20%3D%20%5Cfrac%7B%5Cmathbf%7BY%7D%7D%7B%5Chat%7B%5Cmathbf%7BH%7D%7D%7D)
+```math
+\mathbf{Y} = \mathbf{H} \cdot \mathbf{X} + \mathbf{N} \Rightarrow \hat{\mathbf{X}} = \frac{\mathbf{Y}}{\hat{\mathbf{H}}}
+```
 
 - Y: Alınan Sinyal, H: Kanal Tepkisi, X: Gönderilen Sinyal, X_hat: Tahmin Edilen Sinyal
 
 **Denklem 2 (QPSK LLR):** Eşitlenmiş bir QPSK sembolü (y = y<sub>I</sub> + j · y<sub>Q</sub>) için yumuşak bit tahmini.
 
-![QPSK LLR](https://render.githubusercontent.com/render/math?math=%5Cmathrm%7BLLR%7D%28b_0%29%20%5Cpropto%20%5Cfrac%7By_I%7D%7B%5Csigma_n%5E2%7D%2C%20%5Cquad%20%5Cmathrm%7BLLR%7D%28b_1%29%20%5Cpropto%20%5Cfrac%7By_Q%7D%7B%5Csigma_n%5E2%7D)
+```math
+\mathrm{LLR}(b_0) \propto \frac{y_I}{\sigma_n^2}, \quad \mathrm{LLR}(b_1) \propto \frac{y_Q}{\sigma_n^2}
+```
 
 - σ<sub>n</sub><sup>2</sup>: Gürültü varyansı. LLR değeri ne kadar büyükse, bitin o değerde olduğuna dair güven o kadar yüksektir.
 
