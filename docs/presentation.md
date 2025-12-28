@@ -23,18 +23,14 @@
 *Bu diyagram, verinin hangi aşamalardan geçerek anlamlı bilgiye dönüştüğünü göstermektedir.*
 ```mermaid
 flowchart LR
-    style A fill:#f9f,stroke:#333,stroke-width:2px
-    style I fill:#ccf,stroke:#333,stroke-width:2px
-
-    A[IQ Kaydı (.mat)] --> B(Yükleme ve Ön İşleme);
-    B --> C{Senkronizasyon};
-    C --> |1. PSS Tespiti| D[Zamanlama ve NID₂];
-    C --> |2. SSS Tespiti| E[Çerçeve Zamanlaması ve NID₁];
-    E --> F[PBCH Konumlandırma];
-    F --> G(Kanal Eşitleme);
-    G --> H{MIB Çözümleme};
-    H --> |Viterbi & CRC| I[Çıktı: MIB Parametreleri];
-
+    A["IQ Kaydi (MAT)"] --> B["Yukleme ve On Isleme"]
+    B --> C{"Senkronizasyon"}
+    C -->|"PSS Tespiti"| D["Zamanlama ve NID2"]
+    C -->|"SSS Tespiti"| E["Cerceve Zamanlamasi ve NID1"]
+    E --> F["PBCH Konumlandirma"]
+    F --> G["Kanal Esitleme"]
+    G --> H{"MIB Cozumleme"}
+    H -->|"Viterbi + CRC"| I["Cikti: MIB Parametreleri"]
 ```
 **Algoritmanın Ana Çıktıları:**
 - **`NCellID`**: Hücrenin fiziksel kimliği (0-503).
@@ -84,7 +80,7 @@ $$
 
 **Denklem (CFO Tahmini):** CP (uzunluk $N_{CP}$) ve sembol sonu arasındaki faz farkı.
 $$
-\hat{\omega} = \frac{1}{N_{FFT}} \angle \left( \sum_{n=0}^{N_{CP}-1} x[n] \cdot x^*[n+N_{FFT}] \right)
+\hat{\omega} = \frac{1}{N_{FFT}} \angle \left( \sum_{n=0}^{N_{CP}-1} x[n] \cdot x^{*}[n+N_{FFT}] \right)
 $$
 
 ---
@@ -103,7 +99,7 @@ $$
 
 **Denklem (Normalize Korelasyon):** Alınan sinyal ($y$) ile referans PSS ($s_{PSS}$) arasındaki benzerlik ölçütü. 1'e yakın değerler güçlü eşleşme demektir.
 $$
-\text{metric} = \frac{|\langle s_{\text{PSS}}, y \rangle|}{\|s_{\text{PSS}}\| \cdot \|y\|}
+\mathrm{metric} = \frac{|\langle s_{\mathrm{PSS}}, y \rangle|}{\|s_{\mathrm{PSS}}\| \cdot \|y\|}
 $$
 
 ---
@@ -150,13 +146,13 @@ $$
 
 **Denklem 1 (Zero-Forcing Kanal Eşitleme):** 
 $$
-\mathbf{Y} = \mathbf{H} \cdot \mathbf{X} + \mathbf{N} \quad \implies \quad \hat{\mathbf{X}} = \frac{\mathbf{Y}}{\hat{\mathbf{H}}}
+\mathbf{Y} = \mathbf{H} \cdot \mathbf{X} + \mathbf{N} \quad \Rightarrow \quad \hat{\mathbf{X}} = \frac{\mathbf{Y}}{\hat{\mathbf{H}}}
 $$
 - $\mathbf{Y}$: Alınan Sinyal, $\mathbf{H}$: Kanal Tepkisi, $\mathbf{X}$: Gönderilen Sinyal, $\hat{\mathbf{X}}$: Tahmin Edilen Sinyal
 
 **Denklem 2 (QPSK LLR):** Eşitlenmiş bir QPSK sembolü ($y = y_I + j \cdot y_Q$) için yumuşak bit tahmini.
 $$
-\text{LLR}(b_0) \propto \frac{y_I}{\sigma^2_n}, \quad \text{LLR}(b_1) \propto \frac{y_Q}{\sigma^2_n}
+\mathrm{LLR}(b_0) \propto \frac{y_I}{\sigma_n^2}, \quad \mathrm{LLR}(b_1) \propto \frac{y_Q}{\sigma_n^2}
 $$
 - $\sigma^2_n$: Gürültü varyansı. LLR değeri ne kadar büyükse, bitin o değerde olduğuna dair güven o kadar yüksektir.
 
